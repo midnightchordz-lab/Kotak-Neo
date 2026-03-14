@@ -1,0 +1,94 @@
+{
+  "summary": {
+    "passed": 13,
+    "total": 13,
+    "success_rate": "100.0%"
+  },
+  "test_results": {
+    "Health Check API": {
+      "success": true,
+      "details": {
+        "status": "healthy",
+        "timestamp": "2026-03-14T13:29:47.508444",
+        "simulation_active": false,
+        "kotak_connected": false
+      },
+      "response_time": 0.14974093437194824,
+      "timestamp": "2026-03-14T13:29:47.526140"
+    },
+    "Watchlist API": {
+      "success": true,
+      "details": "Found 2 instruments: ['NIFTY', 'BANKNIFTY']",
+      "response_time": 0.05469369888305664,
+      "timestamp": "2026-03-14T13:29:48.080995"
+    },
+    "Market Quote API": {
+      "success": true,
+      "details": "Quote for NIFTY: LTP=\u20b925455.58, OHL=[24475.18, 25814.19, 24897.52], Bid/Ask=[25455.53, 25455.63]",
+      "response_time": 0.06173086166381836,
+      "timestamp": "2026-03-14T13:29:48.642858"
+    },
+    "Candle Data API": {
+      "success": true,
+      "details": "Received 50 candles with complete OHLCV data",
+      "response_time": 0.05780339241027832,
+      "timestamp": "2026-03-14T13:29:49.200862"
+    },
+    "Signal Generation API": {
+      "success": true,
+      "details": "Direction: NEUTRAL, Score: -2.0, Indicators: 10/10, Names: ['EMA Crossover', 'RSI', 'Supertrend', 'VWAP', 'MACD', 'Bollinger', 'Stochastic', 'Volume Spike', 'OBV Trend', 'Price Action']",
+      "response_time": 0.0715949535369873,
+      "timestamp": "2026-03-14T13:29:49.772640"
+    },
+    "Account Limits API": {
+      "success": true,
+      "details": "Available Margin: \u20b9372,722.10, Mode: simulation",
+      "response_time": 0.052947998046875,
+      "timestamp": "2026-03-14T13:29:50.325731"
+    },
+    "Order Placement API": {
+      "success": true,
+      "details": "Order placed successfully. ID: SIM202603141329501109, Symbol: NIFTY, Side: BUY, Qty: 25",
+      "response_time": 0.06903362274169922,
+      "timestamp": "2026-03-14T13:29:50.894906"
+    },
+    "Positions API": {
+      "success": true,
+      "details": "Retrieved positions: 1 open positions",
+      "response_time": 0.05990314483642578,
+      "timestamp": "2026-03-14T13:29:51.454954"
+    },
+    "Orders API": {
+      "success": true,
+      "details": "Order book retrieved with 3 orders, placed order found",
+      "response_time": 0.06895089149475098,
+      "timestamp": "2026-03-14T13:29:52.024047"
+    },
+    "Backtest API": {
+      "success": true,
+      "details": "Backtest completed: Win Rate: 80.0%, Total P&L: \u20b936039.25, Profit Factor: 7.57, Max DD: 1.84%",
+      "response_time": 0.07873058319091797,
+      "timestamp": "2026-03-14T13:29:52.602958"
+    },
+    "Indicators API": {
+      "success": true,
+      "details": "Retrieved 10 indicator values: ['ema_fast', 'ema_slow', 'rsi', 'supertrend', 'vwap', 'macd_histogram', 'bb_upper', 'bb_lower', 'stoch_k', 'atr']",
+      "response_time": 0.06120920181274414,
+      "timestamp": "2026-03-14T13:29:53.164318"
+    },
+    "Position Size Calculator API": {
+      "success": true,
+      "details": "LTP: \u20b925455.58, Recommended Lots: 1, Max Lots by Capital: 4",
+      "response_time": 0.0671546459197998,
+      "timestamp": "2026-03-14T13:29:53.731611"
+    },
+    "AI Validation API": {
+      "success": true,
+      "details": "AI validation skipped for NEUTRAL signal (expected behavior)",
+      "response_time": 0.08003520965576172,
+      "timestamp": "2026-03-14T13:29:54.311793"
+    }
+  },
+  "base_url": "https://bold-carson-2.preview.emergentagent.com/api",
+  "test_symbol": "NIFTY"
+}
