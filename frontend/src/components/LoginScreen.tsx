@@ -49,7 +49,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLoginSuccess, onSkip
         setError(response.data.error || 'TOTP validation failed');
       }
     } catch (err: any) {
-      setError(err.response?.data?.detail || err.message || 'TOTP validation failed');
+      const errorMsg = err.response?.data?.detail || err.message || 'TOTP validation failed';
+      if (errorMsg.includes('Name or service not known') || errorMsg.includes('Errno')) {
+        setError('Cannot connect to Kotak servers from this environment. Please use DEMO MODE or deploy to a server with external API access.');
+      } else {
+        setError(errorMsg);
+      }
     } finally {
       setLoading(false);
     }
