@@ -10,6 +10,7 @@ import {
   StatusBar,
   Dimensions,
   ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useTradingStore } from '../src/store/tradingStore';
 import { colors, spacing } from '../src/theme/colors';
@@ -19,12 +20,18 @@ import { IndicatorBreakdown } from '../src/components/IndicatorBreakdown';
 import { QuotePanel } from '../src/components/QuotePanel';
 import { RiskRewardPanel } from '../src/components/RiskRewardPanel';
 import { AIValidationPanel } from '../src/components/AIValidationPanel';
+import { LoginScreen } from '../src/components/LoginScreen';
+import axios from 'axios';
+import Constants from 'expo-constants';
 
+const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type TabType = 'signal' | 'positions' | 'orders' | 'backtest';
+type AppMode = 'login' | 'demo' | 'live';
 
 export default function TradingDashboard() {
+  const [appMode, setAppMode] = useState<AppMode>('login');
   const [activeTab, setActiveTab] = useState<TabType>('signal');
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(false);
@@ -49,27 +56,44 @@ export default function TradingDashboard() {
     startSimulation,
     stopSimulation,
     setSelectedSymbol,
+    placeOrder,
   } = useTradingStore();
 
-  // Initial data load
+  // Check auth status on mount
   useEffect(() => {
-    refreshAll();
+    checkAuthStatus();
   }, []);
+
+  const checkAuthStatus = async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/auth/status`);
+      if (response.data.authenticated) {
+        setAppMode('live');
+        refreshAll();
+      }
+    } catch (error) {
+      console.log('Auth check failed, staying on login');
+    }
+  };
 
   // Auto refresh every 3 seconds when enabled
   useEffect(() => {
     let interval: NodeJS.Timeout;
-    if (autoRefresh) {
+    if (autoRefresh && appMode !== 'login') {
       interval = setInterval(() => {
         fetchQuote();
         fetchCandles();
         if (activeTab === 'signal') {
           fetchSignal();
         }
+        if (activeTab === 'positions') {
+          fetchPositions();
+          fetchLimits();
+        }
       }, 3000);
     }
     return () => clearInterval(interval);
-  }, [autoRefresh, activeTab]);
+  }, [autoRefresh, activeTab, appMode]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -86,6 +110,59 @@ export default function TradingDashboard() {
     }, 100);
   };
 
+  const handleLoginSuccess = () => {
+    setAppMode('live');
+    refreshAll();
+  };
+
+  const handleSkipToDemo = () => {
+    setAppMode('demo');
+    refreshAll();
+  };
+
+  const handlePlaceOrder = async (side: 'BUY' | 'SELL') => {
+    const lotSize = selectedSymbol === 'NIFTY' ? 25 : 15;
+    
+    if (appMode === 'live') {
+      Alert.alert(
+        `Confirm ${side} Order`,
+        `Place ${side} order for ${lotSize} qty of ${selectedSymbol}?\n\nThis is a LIVE order!`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Confirm',
+            style: side === 'BUY' ? 'default' : 'destructive',
+            onPress: async () => {
+              try {
+                const result = await placeOrder(side, lotSize);
+                Alert.alert('Order Placed', `Order ID: ${result.order_id}`);
+              } catch (error: any) {
+                Alert.alert('Order Failed', error.message);
+              }
+            },
+          },
+        ]
+      );
+    } else {
+      try {
+        const result = await placeOrder(side, lotSize);
+        Alert.alert('Demo Order Placed', `Order ID: ${result.order_id}\n\nThis is a simulated order.`);
+      } catch (error: any) {
+        Alert.alert('Order Failed', error.message);
+      }
+    }
+  };
+
+  // Show login screen if not authenticated
+  if (appMode === 'login') {
+    return (
+      <LoginScreen
+        onLoginSuccess={handleLoginSuccess}
+        onSkipToDemo={handleSkipToDemo}
+      />
+    );
+  }
+
   const renderTabs = () => (
     <View style={styles.tabBar}>
       {(['signal', 'positions', 'orders', 'backtest'] as TabType[]).map((tab) => (
@@ -94,7 +171,10 @@ export default function TradingDashboard() {
           style={[styles.tab, activeTab === tab && styles.activeTab]}
           onPress={() => {
             setActiveTab(tab);
-            if (tab === 'positions') fetchPositions();
+            if (tab === 'positions') {
+              fetchPositions();
+              fetchLimits();
+            }
             if (tab === 'orders') fetchOrders();
           }}
         >
@@ -110,22 +190,27 @@ export default function TradingDashboard() {
     <View style={styles.header}>
       <View>
         <Text style={styles.headerTitle}>COSTAR AlgoTrader</Text>
-        <Text style={styles.headerSubtitle}>
-          {simulationActive ? 'DEMO MODE - LIVE' : 'DEMO MODE'}
+        <Text style={[
+          styles.headerSubtitle,
+          { color: appMode === 'live' ? colors.bullish : colors.warning }
+        ]}>
+          {appMode === 'live' ? 'LIVE TRADING' : simulationActive ? 'DEMO MODE - LIVE' : 'DEMO MODE'}
         </Text>
       </View>
       <View style={styles.headerRight}>
-        <TouchableOpacity
-          style={[
-            styles.simButton,
-            simulationActive && styles.simButtonActive,
-          ]}
-          onPress={() => simulationActive ? stopSimulation() : startSimulation()}
-        >
-          <Text style={styles.simButtonText}>
-            {simulationActive ? 'STOP' : 'START'}
-          </Text>
-        </TouchableOpacity>
+        {appMode === 'demo' && (
+          <TouchableOpacity
+            style={[
+              styles.simButton,
+              simulationActive && styles.simButtonActive,
+            ]}
+            onPress={() => simulationActive ? stopSimulation() : startSimulation()}
+          >
+            <Text style={styles.simButtonText}>
+              {simulationActive ? 'STOP' : 'START'}
+            </Text>
+          </TouchableOpacity>
+        )}
         <TouchableOpacity
           style={[styles.autoRefreshBtn, autoRefresh && styles.autoRefreshActive]}
           onPress={() => setAutoRefresh(!autoRefresh)}
@@ -134,6 +219,14 @@ export default function TradingDashboard() {
             {autoRefresh ? 'AUTO' : 'MANUAL'}
           </Text>
         </TouchableOpacity>
+        {appMode === 'live' && (
+          <TouchableOpacity
+            style={styles.logoutBtn}
+            onPress={() => setAppMode('login')}
+          >
+            <Text style={styles.logoutText}>LOGOUT</Text>
+          </TouchableOpacity>
+        )}
       </View>
     </View>
   );
@@ -211,12 +304,38 @@ export default function TradingDashboard() {
     </View>
   );
 
+  const renderOrderButtons = () => (
+    <View style={styles.orderButtonsContainer}>
+      <TouchableOpacity
+        style={[styles.orderButton, styles.buyButton]}
+        onPress={() => handlePlaceOrder('BUY')}
+      >
+        <Text style={styles.orderButtonText}>BUY {selectedSymbol}</Text>
+        <Text style={styles.orderButtonSubtext}>
+          {selectedSymbol === 'NIFTY' ? '25' : '15'} qty @ MKT
+        </Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={[styles.orderButton, styles.sellButton]}
+        onPress={() => handlePlaceOrder('SELL')}
+      >
+        <Text style={styles.orderButtonText}>SELL {selectedSymbol}</Text>
+        <Text style={styles.orderButtonSubtext}>
+          {selectedSymbol === 'NIFTY' ? '25' : '15'} qty @ MKT
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+
   const renderSignalTab = () => (
     <View style={styles.signalContainer}>
       {/* Chart Section */}
       <View style={styles.chartSection}>
         <CandlestickChart candles={candles} height={250} />
       </View>
+
+      {/* Order Buttons */}
+      {renderOrderButtons()}
 
       {/* Quote and Signal Section */}
       <View style={styles.row}>
@@ -595,7 +714,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   headerSubtitle: {
-    color: colors.warning,
     fontSize: 10,
     fontWeight: '600',
   },
@@ -623,12 +741,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 4,
+    marginRight: 8,
   },
   autoRefreshActive: {
     backgroundColor: colors.primary,
   },
   autoRefreshText: {
     color: colors.text,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  logoutBtn: {
+    backgroundColor: colors.bearish,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 4,
+  },
+  logoutText: {
+    color: 'white',
     fontSize: 10,
     fontWeight: '600',
   },
@@ -714,6 +844,33 @@ const styles = StyleSheet.create({
   },
   chartSection: {
     marginBottom: spacing.md,
+  },
+  orderButtonsContainer: {
+    flexDirection: 'row',
+    marginBottom: spacing.md,
+  },
+  orderButton: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: 6,
+    alignItems: 'center',
+    marginHorizontal: 4,
+  },
+  buyButton: {
+    backgroundColor: colors.bullish,
+  },
+  sellButton: {
+    backgroundColor: colors.bearish,
+  },
+  orderButtonText: {
+    color: 'white',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  orderButtonSubtext: {
+    color: 'rgba(255,255,255,0.7)',
+    fontSize: 10,
+    marginTop: 2,
   },
   row: {
     flexDirection: 'row',
