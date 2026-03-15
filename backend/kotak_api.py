@@ -647,10 +647,11 @@ class KotakNeoAPI:
         """
         Get quote for index instruments like NIFTY, BANKNIFTY.
         
-        Args:
-            symbol: NIFTY or BANKNIFTY
+        Index tokens from Kotak scrip master:
+        - NIFTY 50: 26000 (nse_cm)
+        - NIFTY BANK: 26009 (nse_cm)
         """
-        # Index instrument tokens (these are standard)
+        # Correct index instrument tokens from Kotak scrip master
         index_tokens = {
             'NIFTY': {'instrument_token': '26000', 'exchange_segment': 'nse_cm'},
             'NIFTY 50': {'instrument_token': '26000', 'exchange_segment': 'nse_cm'},
@@ -663,6 +664,48 @@ class KotakNeoAPI:
             return {'success': False, 'error': f'Unknown index: {symbol}'}
         
         return await self.get_quotes([token_info], quote_type='ltp', is_index=True)
+    
+    async def get_quotes_v2(self, instrument_tokens: list, quote_type: str = 'ltp') -> Dict:
+        """
+        Alternative quotes API using the legacy tradeapi endpoint.
+        GET https://tradeapi.kotaksecurities.com/apim/quotes/v1.0/depth/instruments/{token}
+        
+        This is a fallback if the script-details endpoint doesn't work.
+        """
+        if not instrument_tokens:
+            return {'success': False, 'error': 'No instrument tokens provided'}
+        
+        # Use the first token for single quote
+        token = instrument_tokens[0].get('instrument_token', '')
+        
+        url = f'https://tradeapi.kotaksecurities.com/apim/quotes/v1.0/depth/instruments/{token}'
+        
+        headers = {
+            'accept': 'application/json',
+            'consumerKey': self.consumer_key,
+            'Authorization': self.consumer_key
+        }
+        
+        if self.session.is_authenticated:
+            headers['sessionToken'] = self.session.edit_token
+        
+        logger.info(f"Quotes v2 request to: {url}")
+        
+        try:
+            response = await self.client.get(url, headers=headers)
+            
+            logger.info(f"Quotes v2 response status: {response.status_code}")
+            logger.info(f"Quotes v2 response: {response.text[:500]}")
+            
+            data = response.json()
+            
+            if 200 <= response.status_code <= 299:
+                return {'success': True, 'quotes': data.get('success', data), 'raw_response': data}
+            else:
+                return {'success': False, 'error': data.get('message', 'Failed'), 'raw_response': data}
+        except Exception as e:
+            logger.error(f'Quotes v2 error: {e}')
+            return {'success': False, 'error': str(e)}
     
     async def get_scripmaster(self, exchange_segment: str = None) -> Dict:
         """
