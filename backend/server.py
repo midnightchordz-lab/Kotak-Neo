@@ -34,6 +34,7 @@ from kotak_hsm import KotakHSMWebSocket, get_hsm_client, set_hsm_client
 from kotak_scrip_master import scrip_master, KotakScripMaster
 from live_price_poller import live_price_poller, get_live_poller
 from live_options_service import live_options_service, get_live_options_service
+from nse_options_service import nse_options_service, get_nse_options_service
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -1193,26 +1194,37 @@ async def calculate_position_size(symbol: str, risk_percent: float = 1.0, capita
 
 @api_router.get("/options/expiries/{underlying}")
 async def get_options_expiries(underlying: str):
-    """Get available expiry dates for options - uses real dates when available"""
+    """Get available expiry dates for options - fetches real dates from NSE"""
     underlying_upper = underlying.upper()
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    # Try to get real expiries from live options service
+    # Try NSE first for real expiry dates
+    nse_service = get_nse_options_service()
+    expiries = await nse_service.get_real_expiries(underlying_upper)
+    
+    if expiries:
+        return {
+            "success": True,
+            "underlying": underlying_upper,
+            "expiries": expiries,
+            "source": "nse_live",
+            "last_updated": nse_service.last_updated.isoformat() if nse_service.last_updated else None
+        }
+    
+    # Fallback to calculated expiries if NSE fails
     opts_service = get_live_options_service()
     expiries = opts_service.get_expiries(underlying_upper)
     
     if not expiries:
-        # Initialize if needed
         await opts_service.fetch_instruments()
         expiries = opts_service.get_expiries(underlying_upper)
     
     if not expiries:
-        # Fall back to calculated expiries
         expiries = opts_service._generate_weekly_expiries(datetime.now().date(), 4)
         source = "calculated"
     else:
-        source = "live" if opts_service.last_updated else "cached"
+        source = "kotak" if opts_service.last_updated else "cached"
     
     return {
         "success": True,
@@ -1225,16 +1237,44 @@ async def get_options_expiries(underlying: str):
 @api_router.get("/options/chain/{underlying}")
 async def get_options_chain(underlying: str, expiry: Optional[str] = None, strikes: int = 15):
     """
-    Get complete options chain for an underlying with live data
+    Get complete options chain for an underlying with LIVE data from NSE
     
     Args:
         underlying: NIFTY or BANKNIFTY
-        expiry: Expiry date (YYYY-MM-DD format), uses nearest if not provided
+        expiry: Expiry date (NSE format like "20-Mar-2025"), uses nearest if not provided
         strikes: Number of strikes on each side of ATM (default 15)
     """
     underlying_upper = underlying.upper()
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
+    
+    # Try NSE first for real live data
+    nse_service = get_nse_options_service()
+    nse_chain = await nse_service.build_options_chain(
+        symbol=underlying_upper,
+        expiry=expiry,
+        num_strikes=strikes
+    )
+    
+    if nse_chain and nse_chain.calls:
+        logger.info(f"Using NSE LIVE data for {underlying_upper}")
+        return {
+            "success": True,
+            "underlying": nse_chain.underlying,
+            "spot_price": nse_chain.spot_price,
+            "price_source": "nse_live",
+            "expiry": nse_chain.expiry,
+            "atm_strike": nse_chain.atm_strike,
+            "pcr": nse_chain.pcr,
+            "max_pain": nse_chain.max_pain,
+            "timestamp": nse_chain.timestamp,
+            "is_live": True,
+            "calls": [asdict(c) for c in nse_chain.calls],
+            "puts": [asdict(p) for p in nse_chain.puts]
+        }
+    
+    # Fallback to Kotak/simulation if NSE fails
+    logger.warning(f"NSE data not available, falling back to simulation for {underlying_upper}")
     
     # Try to get LIVE spot price - first from poller, then direct API
     spot_price = None
