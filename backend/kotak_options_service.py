@@ -103,8 +103,12 @@ class KotakOptionsService:
         API: GET <baseUrl>/script-details/1.0/masterscrip/file-paths
         Headers: Authorization: <access_token>
         """
+        logger.info("=== FETCH SCRIPMASTER CALLED ===")
+        logger.info(f"base_url: {self.base_url[:50] if self.base_url else 'EMPTY'}")
+        logger.info(f"access_token: {self.access_token[:20] if self.access_token else 'EMPTY'}...")
+        
         if not self.base_url or not self.access_token:
-            logger.error("No base_url or access_token available")
+            logger.error("Cannot fetch scripmaster: No base_url or access_token available")
             return False
         
         try:
@@ -118,15 +122,20 @@ class KotakOptionsService:
             async with httpx.AsyncClient(timeout=60) as client:
                 # Get file paths
                 url = f"{self.base_url}/script-details/1.0/masterscrip/file-paths"
+                logger.info(f"Scripmaster URL: {url}")
+                
                 response = await client.get(url, headers=headers)
                 
                 logger.info(f"Scripmaster paths response: {response.status_code}")
+                logger.info(f"Response text: {response.text[:500]}")
                 
                 if response.status_code == 200:
                     data = response.json()
                     file_paths = data.get('data', {}).get('filesPaths', [])
                     
                     logger.info(f"Got {len(file_paths)} scripmaster files")
+                    for fp in file_paths:
+                        logger.info(f"  File: {fp}")
                     
                     # Find NSE FO file
                     nse_fo_url = None
@@ -145,6 +154,8 @@ class KotakOptionsService:
                     
         except Exception as e:
             logger.error(f"Error fetching scripmaster: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
         
         return False
     
