@@ -64,22 +64,45 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
   - OI, OI Change, IV, LTP display
   - Order modal with Greeks display and premium calculation
 
-#### Phase 4: WebSocket Integration (Completed - March 15, 2026)
-- [x] WebSocket connection manager for real-time streaming
-- [x] Subscription system for quotes, signals, options, positions, orders
-- [x] Background broadcast task for live data updates
-- [x] WebSocket endpoint: /ws
-- [x] Stats endpoint: GET /api/ws/stats
-- [x] Notification broadcasting support
+#### Phase 4: Live Price Polling (Completed - March 15, 2026)
+- [x] REST-based live price polling (alternative to WebSocket)
+- [x] LivePricePoller class with 2-second polling interval
+- [x] Auto-starts after MPIN authentication
+- [x] Caches NIFTY and BANKNIFTY live prices
+- [x] New API endpoints:
+  - POST /api/live-prices/start - Start poller
+  - POST /api/live-prices/stop - Stop poller
+  - GET /api/live-prices/status - Poller statistics
+  - GET /api/live-prices/latest - All cached prices
+  - GET /api/live-prices/{symbol} - Specific symbol price
+- [x] Options chain now uses live spot prices from poller
+
+### ⚠️ Known Limitations
+
+#### HSM WebSocket Not Available from EC2
+- Kotak's HSM WebSocket server (`wstreamer.kotaksecurities.com`) is not reachable from AWS EC2
+- Connection times out at TCP level (likely IP block on financial data streams)
+- **Workaround**: REST-based polling implemented as alternative (2-second interval)
+
+#### Options Chain Data is Simulated
+- Expiry dates are generated (not fetched from Kotak)
+- Option prices use Black-Scholes model (not live market prices)
+- OI and Greeks are simulated
+- **Note**: Live spot price IS used for ATM calculation
 
 ### 🔮 Future Tasks
 
-#### P3: Enhanced UI (Phase 5)
+#### P1: Real Options Data
+- [ ] Fetch real expiry dates from Kotak scrip master
+- [ ] Use scrip master for instrument tokens
+- [ ] Poll individual option contract prices via REST API
+
+#### P2: Enhanced UI (Phase 5)
 - [ ] Mobile-first UI optimization
 - [ ] Advanced charting features (drawing tools, indicators overlay)
 - [ ] Watchlist customization
 
-#### P4: Production Deployment Enhancements
+#### P3: Production Deployment Enhancements
 - [ ] Custom domain with SSL (HTTPS)
 - [ ] Performance optimization
 - [ ] Rate limiting and security hardening
@@ -89,15 +112,18 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
 ### Backend (Python/FastAPI)
 ```
 /app/backend/
-├── server.py          # Main FastAPI app with all routes (~1000 lines)
-├── kotak_api.py       # Kotak NEO API client (v2)
-├── ai_validator.py    # Claude AI signal validation
-├── confluence.py      # 10-indicator scoring engine
-├── indicators.py      # Technical indicators
-├── simulator.py       # Market data simulation
-├── backtester.py      # Strategy backtesting
-├── options_chain.py   # NEW: Options chain generator
-├── websocket_manager.py # NEW: WebSocket connection manager
+├── server.py              # Main FastAPI app with all routes
+├── kotak_api.py           # Kotak NEO API client (v2)
+├── ai_validator.py        # Claude AI signal validation
+├── confluence.py          # 10-indicator scoring engine
+├── indicators.py          # Technical indicators
+├── simulator.py           # Market data simulation
+├── backtester.py          # Strategy backtesting
+├── options_chain.py       # Options chain generator (simulated)
+├── websocket_manager.py   # WebSocket connection manager
+├── live_price_poller.py   # NEW: REST-based live price polling
+├── kotak_hsm.py          # HSM WebSocket client (not working from EC2)
+├── kotak_scrip_master.py # Scrip master fetcher
 └── requirements.txt
 ```
 
@@ -105,11 +131,11 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
 ```
 /app/frontend/
 ├── app/
-│   └── index.tsx      # Main dashboard with 6 tabs
+│   └── index.tsx      # Main dashboard with tabs
 ├── src/
 │   ├── components/
 │   │   ├── StocksTab.tsx         # Stocks trading tab
-│   │   ├── OptionsTab.tsx        # NEW: Options trading tab
+│   │   ├── OptionsTab.tsx        # Options trading tab
 │   │   ├── CandlestickChart.tsx
 │   │   ├── ConfluenceGauge.tsx
 │   │   ├── AIValidationPanel.tsx
@@ -127,6 +153,10 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
 | /api/health | GET | Health check |
 | /api/auth/totp | POST | TOTP authentication |
 | /api/auth/mpin | POST | MPIN authentication |
+| /api/auth/status | GET | Auth status with session info |
+| /api/live-prices/status | GET | Live poller statistics |
+| /api/live-prices/latest | GET | All cached live prices |
+| /api/live-prices/{symbol} | GET | Live price for symbol |
 | /api/watchlist | GET | All 12 instruments |
 | /api/watchlist/indices | GET | NIFTY, BANKNIFTY |
 | /api/watchlist/stocks | GET | 10 stocks for CNC |
@@ -136,8 +166,6 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
 | /api/options/chain/{underlying} | GET | Full options chain |
 | /api/options/signal/{underlying} | GET | PCR-based signal |
 | /api/options/order | POST | Place options order |
-| /ws | WebSocket | Real-time streaming |
-| /api/ws/stats | GET | WebSocket statistics |
 | /api/market/quote/{symbol} | GET | Current quote |
 | /api/market/candles/{symbol} | GET | OHLCV candles |
 | /api/orders/place | POST | Place order |
@@ -166,13 +194,17 @@ EXPO_PUBLIC_BACKEND_URL="https://options-chain.preview.emergentagent.com"
 
 ## Deployment
 - **Preview Environment**: https://options-chain.preview.emergentagent.com
-- **Production (AWS EC2)**: http://ec2-51-20-66-73.eu-north-1.compute.amazonaws.com
+- **Production (AWS EC2)**: http://51.20.66.73 (user's EC2 instance)
+  - Backend: pm2 managed, port 8001
+  - Frontend: Nginx serving static build
+  - Python venv: /home/ubuntu/Kotak-Neo/backend/venv/
 
 ## Testing Status
 - Backend: All tests passed (100%)
 - Frontend: All flows tested successfully
 - Demo mode: Fully functional
-- Live trading: Authentication working (requires user credentials)
+- Live trading: Authentication working, live prices polling working
+- HSM WebSocket: NOT WORKING from EC2 (network block)
 
 ## Last Updated
 March 15, 2026
