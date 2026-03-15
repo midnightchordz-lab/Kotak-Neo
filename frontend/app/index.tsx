@@ -22,13 +22,14 @@ import { RiskRewardPanel } from '../src/components/RiskRewardPanel';
 import { AIValidationPanel } from '../src/components/AIValidationPanel';
 import { LoginScreen } from '../src/components/LoginScreen';
 import { StocksTab } from '../src/components/StocksTab';
+import { OptionsTab } from '../src/components/OptionsTab';
 import axios from 'axios';
 import Constants from 'expo-constants';
 
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-type TabType = 'signal' | 'stocks' | 'positions' | 'orders' | 'backtest';
+type TabType = 'signal' | 'stocks' | 'options' | 'positions' | 'orders' | 'backtest';
 type AppMode = 'login' | 'demo' | 'live';
 
 export default function TradingDashboard() {
@@ -79,7 +80,7 @@ export default function TradingDashboard() {
 
   // Auto refresh every 3 seconds when enabled
   useEffect(() => {
-    let interval: NodeJS.Timeout;
+    let interval: ReturnType<typeof setInterval>;
     if (autoRefresh && appMode !== 'login') {
       interval = setInterval(() => {
         fetchQuote();
@@ -166,7 +167,7 @@ export default function TradingDashboard() {
 
   const renderTabs = () => (
     <View style={styles.tabBar}>
-      {(['signal', 'stocks', 'positions', 'orders', 'backtest'] as TabType[]).map((tab) => (
+      {(['signal', 'stocks', 'options', 'positions', 'orders', 'backtest'] as TabType[]).map((tab) => (
         <TouchableOpacity
           key={tab}
           style={[styles.tab, activeTab === tab && styles.activeTab]}
@@ -524,6 +525,7 @@ export default function TradingDashboard() {
 
         {activeTab === 'signal' && renderSignalTab()}
         {activeTab === 'stocks' && <StocksTab appMode={appMode} />}
+        {activeTab === 'options' && <OptionsTab appMode={appMode} />}
         {activeTab === 'positions' && renderPositionsTab()}
         {activeTab === 'orders' && renderOrdersTab()}
         {activeTab === 'backtest' && renderBacktestTab()}

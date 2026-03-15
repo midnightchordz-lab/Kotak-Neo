@@ -1,0 +1,149 @@
+{
+  "total_tests": 6,
+  "passed_tests": 6,
+  "failed_tests": 0,
+  "success_rate": 100.0,
+  "test_results": {
+    "options_expiries": true,
+    "options_chain": true,
+    "options_signal": true,
+    "options_quote": true,
+    "options_order": true,
+    "websocket_stats": true
+  },
+  "detailed_results": [
+    {
+      "timestamp": "2026-03-15T10:02:09.735999",
+      "endpoint": "GET /api/options/expiries/NIFTY",
+      "status": "\u2705 PASS",
+      "details": "Returns 4 expiry dates as expected",
+      "response_data": {
+        "expiry_count": 4,
+        "expiries": [
+          "2026-03-19",
+          "2026-03-26",
+          "2026-04-02",
+          "2026-04-09"
+        ]
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:09.781395",
+      "endpoint": "GET /api/options/expiries/BANKNIFTY",
+      "status": "\u2705 PASS",
+      "details": "Returns 4 expiry dates as expected",
+      "response_data": {
+        "expiry_count": 4,
+        "expiries": [
+          "2026-03-19",
+          "2026-03-26",
+          "2026-04-02",
+          "2026-04-09"
+        ]
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:09.827582",
+      "endpoint": "GET /api/options/chain/NIFTY?strikes=10",
+      "status": "\u2705 PASS",
+      "details": "Complete chain data: spot=24873.64, atm=24850, pcr=1.17, calls=21, puts=21",
+      "response_data": {
+        "spot_price": 24873.64,
+        "atm_strike": 24850,
+        "pcr": 1.17,
+        "calls_count": 21,
+        "puts_count": 21
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:09.873345",
+      "endpoint": "GET /api/options/chain/BANKNIFTY?strikes=5",
+      "status": "\u2705 PASS",
+      "details": "Complete chain data: spot=53634.68, atm=53600, pcr=1.1, calls=11, puts=11",
+      "response_data": {
+        "spot_price": 53634.68,
+        "atm_strike": 53600,
+        "pcr": 1.1,
+        "calls_count": 11,
+        "puts_count": 11
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:09.929968",
+      "endpoint": "GET /api/options/signal/NIFTY",
+      "status": "\u2705 PASS",
+      "details": "Signal: BULLISH, Confidence: 55.4, PCR: 1.18, Support: 24850, Resistance: 24850",
+      "response_data": {
+        "direction": "BULLISH",
+        "confidence": 55.4,
+        "pcr": 1.18,
+        "support": 24850,
+        "resistance": 24850,
+        "recommendation": {
+          "primary": "BUY NIFTY 24850 CE",
+          "alternative": "SELL NIFTY 24750 PE",
+          "strategy": "Bull Call Spread or Cash Secured Put"
+        }
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:09.979573",
+      "endpoint": "GET /api/options/quote/NIFTY/24850/CE",
+      "status": "\u2705 PASS",
+      "details": "Contract details received for NIFTY 24850 CE, spot: 24873.64",
+      "response_data": {
+        "strike": 24850,
+        "ltp": 295.5,
+        "spot_price": 24873.64
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:10.021675",
+      "endpoint": "GET /api/options/quote/NIFTY/24850/PE",
+      "status": "\u2705 PASS",
+      "details": "Contract details received for NIFTY 24850 PE, spot: 24873.64",
+      "response_data": {
+        "strike": 24850,
+        "ltp": 222.04,
+        "spot_price": 24873.64
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:10.066172",
+      "endpoint": "POST /api/options/order",
+      "status": "\u2705 PASS",
+      "details": "Options order placed successfully. Order ID: OPT202603151002108D0B, Mode: simulation",
+      "response_data": {
+        "order_id": "OPT202603151002108D0B",
+        "mode": "simulation",
+        "details": {
+          "symbol": "NIFTY2026031924850CE",
+          "strike": 24850.0,
+          "option_type": "CE",
+          "side": "BUY",
+          "quantity": 1,
+          "lots": 1,
+          "lot_size": 25,
+          "price": 246.95,
+          "premium": 6173.75
+        }
+      }
+    },
+    {
+      "timestamp": "2026-03-15T10:02:10.109414",
+      "endpoint": "GET /api/ws/stats",
+      "status": "\u2705 PASS",
+      "details": "WebSocket stats retrieved successfully",
+      "response_data": {
+        "stats": {
+          "total_connections": 0,
+          "quote_subscriptions": {},
+          "signal_subscriptions": {},
+          "options_subscriptions": {},
+          "position_subscribers": 0,
+          "order_subscribers": 0
+        }
+      }
+    }
+  ]
+}

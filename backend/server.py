@@ -2,7 +2,7 @@
 COSTAR Kotak Neo F&O Algo Trader - API Server
 Professional-grade intraday trading application for NSE F&O
 """
-from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks
+from fastapi import FastAPI, APIRouter, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -15,6 +15,7 @@ from typing import List, Dict, Optional, Any
 import uuid
 from datetime import datetime
 import asyncio
+from dataclasses import asdict
 
 # Load environment variables
 ROOT_DIR = Path(__file__).parent
@@ -27,6 +28,8 @@ from kotak_api import KotakNeoAPI
 from simulator import MarketSimulator
 from ai_validator import AIValidator
 from backtester import Backtester
+from options_chain import options_chain_generator, OptionsChain
+from websocket_manager import ws_manager
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -56,6 +59,7 @@ backtester = Backtester()
 # Simulation state
 simulation_active = False
 simulation_task = None
+websocket_broadcast_task = None
 
 # ==================== MODELS ====================
 
@@ -167,13 +171,14 @@ async def auth_status():
 @api_router.post("/simulation/start")
 async def start_simulation(background_tasks: BackgroundTasks):
     """Start market simulation"""
-    global simulation_active
+    global simulation_active, websocket_broadcast_task
     
     if simulation_active:
         return {"message": "Simulation already running"}
     
     simulation_active = True
     background_tasks.add_task(run_simulation_loop)
+    background_tasks.add_task(broadcast_market_data)
     
     return {"message": "Simulation started", "status": "running"}
 
@@ -737,6 +742,277 @@ async def calculate_position_size(symbol: str, risk_percent: float = 1.0, capita
         "sl_distance": round(sl_distance, 2),
         "risk_per_lot": round(risk_per_lot, 2)
     }
+
+# ==================== OPTIONS CHAIN ====================
+
+@api_router.get("/options/expiries/{underlying}")
+async def get_options_expiries(underlying: str):
+    """Get available expiry dates for options"""
+    underlying_upper = underlying.upper()
+    if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
+        raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
+    
+    expiries = options_chain_generator.generate_expiries()
+    return {
+        "success": True,
+        "underlying": underlying_upper,
+        "expiries": expiries
+    }
+
+@api_router.get("/options/chain/{underlying}")
+async def get_options_chain(underlying: str, expiry: Optional[str] = None, strikes: int = 15):
+    """
+    Get complete options chain for an underlying
+    
+    Args:
+        underlying: NIFTY or BANKNIFTY
+        expiry: Expiry date (YYYY-MM-DD format), uses nearest if not provided
+        strikes: Number of strikes on each side of ATM (default 15)
+    """
+    underlying_upper = underlying.upper()
+    if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
+        raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
+    
+    # Get current spot price
+    spot_price = simulator.get_ltp(underlying_upper)
+    if not spot_price:
+        raise HTTPException(status_code=400, detail=f"No price data for {underlying_upper}")
+    
+    # Generate options chain
+    chain = options_chain_generator.generate_chain(
+        underlying=underlying_upper,
+        spot_price=spot_price,
+        expiry_date=expiry,
+        num_strikes=strikes
+    )
+    
+    # Convert to dict format
+    return {
+        "success": True,
+        "underlying": chain.underlying,
+        "spot_price": chain.spot_price,
+        "expiry": chain.expiry,
+        "atm_strike": chain.atm_strike,
+        "pcr": chain.pcr,
+        "max_pain": chain.max_pain,
+        "timestamp": chain.timestamp,
+        "calls": [asdict(c) for c in chain.calls],
+        "puts": [asdict(p) for p in chain.puts]
+    }
+
+@api_router.get("/options/signal/{underlying}")
+async def get_options_signal(underlying: str, expiry: Optional[str] = None):
+    """
+    Get trading signal based on options chain analysis
+    Analyzes PCR, OI buildup, and max pain
+    """
+    underlying_upper = underlying.upper()
+    if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
+        raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
+    
+    spot_price = simulator.get_ltp(underlying_upper)
+    if not spot_price:
+        raise HTTPException(status_code=400, detail=f"No price data for {underlying_upper}")
+    
+    chain = options_chain_generator.generate_chain(
+        underlying=underlying_upper,
+        spot_price=spot_price,
+        expiry_date=expiry
+    )
+    
+    signal = options_chain_generator.get_option_signal(chain)
+    
+    return {
+        "success": True,
+        "underlying": underlying_upper,
+        "spot_price": spot_price,
+        "expiry": chain.expiry,
+        **signal
+    }
+
+@api_router.get("/options/quote/{underlying}/{strike}/{option_type}")
+async def get_option_quote(underlying: str, strike: float, option_type: str, 
+                          expiry: Optional[str] = None):
+    """
+    Get quote for a specific option contract
+    
+    Args:
+        underlying: NIFTY or BANKNIFTY
+        strike: Strike price
+        option_type: CE or PE
+    """
+    underlying_upper = underlying.upper()
+    option_type_upper = option_type.upper()
+    
+    if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
+        raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
+    
+    if option_type_upper not in ['CE', 'PE']:
+        raise HTTPException(status_code=400, detail="Option type must be CE or PE")
+    
+    spot_price = simulator.get_ltp(underlying_upper)
+    chain = options_chain_generator.generate_chain(
+        underlying=underlying_upper,
+        spot_price=spot_price,
+        expiry_date=expiry
+    )
+    
+    # Find the option contract
+    options = chain.calls if option_type_upper == 'CE' else chain.puts
+    contract = next((o for o in options if o.strike == strike), None)
+    
+    if not contract:
+        raise HTTPException(status_code=404, detail=f"Option contract not found: {underlying_upper} {strike} {option_type_upper}")
+    
+    return {
+        "success": True,
+        "contract": asdict(contract),
+        "spot_price": spot_price
+    }
+
+class OptionsOrderRequest(BaseModel):
+    underlying: str
+    strike: float
+    option_type: str  # CE or PE
+    side: str  # BUY or SELL
+    quantity: int
+    order_type: str = "MKT"
+    price: float = 0
+    expiry: Optional[str] = None
+
+@api_router.post("/options/order")
+async def place_options_order(request: OptionsOrderRequest):
+    """Place an options order"""
+    underlying_upper = request.underlying.upper()
+    option_type_upper = request.option_type.upper()
+    
+    if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
+        raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
+    
+    # Get lot size
+    lot_size = options_chain_generator.LOT_SIZES.get(underlying_upper, 25)
+    
+    # Generate trading symbol
+    expiries = options_chain_generator.generate_expiries()
+    expiry = request.expiry or expiries[0]
+    trading_symbol = f"{underlying_upper}{expiry.replace('-', '')}{int(request.strike)}{option_type_upper}"
+    
+    # Try live API first
+    if kotak_api and kotak_api.session.is_authenticated:
+        order_data = {
+            "exchange_segment": "nse_fo",
+            "trading_symbol": trading_symbol,
+            "transaction_type": "B" if request.side.upper() == "BUY" else "S",
+            "quantity": str(request.quantity * lot_size),
+            "product": "NRML",
+            "order_type": request.order_type,
+            "price": str(request.price) if request.order_type != "MKT" else "0",
+            "validity": "DAY",
+            "amo": "NO"
+        }
+        result = await kotak_api.place_order(order_data)
+        return result
+    
+    # Simulation mode
+    spot_price = simulator.get_ltp(underlying_upper)
+    chain = options_chain_generator.generate_chain(
+        underlying=underlying_upper,
+        spot_price=spot_price,
+        expiry_date=expiry
+    )
+    
+    options = chain.calls if option_type_upper == 'CE' else chain.puts
+    contract = next((o for o in options if o.strike == request.strike), None)
+    
+    if not contract:
+        raise HTTPException(status_code=404, detail="Option contract not found")
+    
+    order_id = f'OPT{datetime.utcnow().strftime("%Y%m%d%H%M%S")}{uuid.uuid4().hex[:4].upper()}'
+    
+    return {
+        "success": True,
+        "order_id": order_id,
+        "mode": "simulation",
+        "details": {
+            "symbol": trading_symbol,
+            "strike": request.strike,
+            "option_type": option_type_upper,
+            "side": request.side.upper(),
+            "quantity": request.quantity,
+            "lots": request.quantity,
+            "lot_size": lot_size,
+            "price": contract.ltp,
+            "premium": contract.ltp * lot_size * request.quantity
+        }
+    }
+
+# ==================== WEBSOCKET ====================
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    WebSocket endpoint for real-time market data streaming
+    
+    Client can send:
+    - {"action": "subscribe", "type": "quotes", "symbols": ["NIFTY", "BANKNIFTY"]}
+    - {"action": "subscribe", "type": "signals", "symbols": ["NIFTY"]}
+    - {"action": "subscribe", "type": "options", "symbols": ["NIFTY"]}
+    - {"action": "subscribe", "type": "positions"}
+    - {"action": "subscribe", "type": "orders"}
+    - {"action": "unsubscribe", "type": "quotes", "symbols": ["NIFTY"]}
+    - {"action": "ping"}
+    
+    Server sends:
+    - {"type": "quote", "data": {...}, "timestamp": "..."}
+    - {"type": "signal", "data": {...}, "timestamp": "..."}
+    - {"type": "options", "data": {...}, "timestamp": "..."}
+    - {"type": "positions", "data": {...}, "timestamp": "..."}
+    - {"type": "orders", "data": {...}, "timestamp": "..."}
+    - {"type": "notification", "data": {...}, "timestamp": "..."}
+    """
+    await ws_manager.connect(websocket)
+    try:
+        while True:
+            message = await websocket.receive_text()
+            await ws_manager.handle_message(websocket, message)
+    except WebSocketDisconnect:
+        ws_manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        ws_manager.disconnect(websocket)
+
+@api_router.get("/ws/stats")
+async def get_websocket_stats():
+    """Get WebSocket connection statistics"""
+    return {
+        "success": True,
+        "stats": ws_manager.get_stats()
+    }
+
+# ==================== WEBSOCKET BROADCAST ====================
+
+async def broadcast_market_data():
+    """Background task to broadcast market data via WebSocket"""
+    global websocket_broadcast_task
+    while simulation_active:
+        try:
+            # Broadcast quotes for all instruments
+            for symbol in simulator.instruments.keys():
+                quote = simulator.get_quote(symbol)
+                if quote:
+                    await ws_manager.broadcast_quote(symbol, quote)
+            
+            # Broadcast positions and orders
+            positions = simulator.get_positions()
+            await ws_manager.broadcast_positions(positions)
+            
+            orders = simulator.get_orders()
+            await ws_manager.broadcast_orders(orders)
+            
+            await asyncio.sleep(1)  # Broadcast every second
+        except Exception as e:
+            logger.error(f"Broadcast error: {e}")
+            await asyncio.sleep(1)
 
 # Include the router
 app.include_router(api_router)

@@ -479,6 +479,78 @@ test_plan:
   test_all: true
   test_priority: "high_first"
 
+  - task: "Options Expiries API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Options expiries endpoints working perfectly. GET /api/options/expiries/NIFTY returns 4 expiry dates (2026-03-19, 2026-03-26, 2026-04-02, 2026-04-09). GET /api/options/expiries/BANKNIFTY also returns 4 expiry dates correctly. Weekly Thursday expiries generated properly."
+
+  - task: "Options Chain API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Options chain API working perfectly. GET /api/options/chain/NIFTY?strikes=10 returns complete chain with spot_price=24873.64, atm_strike=24850, pcr=1.17, 21 calls and 21 puts with proper structure (ltp, iv, open_interest, delta, theta). BANKNIFTY chain also works with strikes=5 returning 11 calls/puts each."
+
+  - task: "Options Signal API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Options signal API working correctly. GET /api/options/signal/NIFTY returns proper signal structure with direction=BULLISH, confidence=55.4, pcr=1.18, support=24850, resistance=24850, and detailed recommendation object with primary/alternative/strategy fields."
+
+  - task: "Options Quote API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Options quote API working correctly. GET /api/options/quote/NIFTY/24850/CE returns contract details with strike=24850, ltp=295.5, spot_price=24873.64. PE quotes also work properly. Contract data structure is accurate and complete."
+
+  - task: "Options Order API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Options order placement working perfectly. POST /api/options/order with {underlying: NIFTY, strike: 24850, option_type: CE, side: BUY, quantity: 1} returns order_id and mode=simulation. Order details include symbol, lot_size=25, premium calculation."
+
+  - task: "WebSocket Stats API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: WebSocket stats API working correctly. GET /api/ws/stats returns connection statistics with total_connections, quote_subscriptions, signal_subscriptions, options_subscriptions, position_subscribers, and order_subscribers."
+
 agent_communication:
   - agent: "main"
     message: "COSTAR Kotak Neo F&O Algo Trader MVP implemented. Backend has all core APIs working including signal generation with 10 indicators, backtesting, order management, and market simulation. Frontend has dark terminal UI with chart, gauge, quote panel, and tab navigation. Please test all high priority backend APIs."
@@ -488,3 +560,5 @@ agent_communication:
     message: "✅ COMPREHENSIVE API TESTING COMPLETE: All 17 backend endpoints tested successfully with 100% pass rate. Verified: Health Check (healthy status), Watchlist APIs (12 instruments: 2 indices + 10 stocks with correct segments), Stock Search (returns all/filtered results), Instrument Details (proper segment mapping), Signal Generation (10 indicators with structured votes), Market Data (quotes + candles), Order Placement (simulation mode), and Simulation Control (start/stop/status). All APIs return proper data structures matching specifications."
   - agent: "testing"
     message: "✅ FRONTEND TESTING COMPLETE: All core user flows tested and working perfectly at https://neo-trader-sandbox.preview.emergentagent.com. LOGIN FLOW: TOTP input visible, CONTINUE IN DEMO MODE button works, dashboard loads with all tabs. SIGNAL TAB: Candlestick chart displays properly, NIFTY/BANKNIFTY selectors work, BUY/SELL buttons visible, confluence gauge shows NEUTRAL -2.0 with 20% confidence. STOCKS TAB (NEW FEATURE): 'Stocks Watchlist' header visible, 10 stocks listed (RELIANCE, TCS, INFY, HDFCBANK, ICICIBANK, SBIN) with CNC badges, stock cards functional. POSITIONS TAB: 'Open Positions' header visible, shows RELIANCE position with P&L data. ORDERS TAB: 'Order Book' header visible, shows executed RELIANCE order. UI is responsive, mobile-first design works well on desktop viewport. All requested flows working as specified."
+  - agent: "testing"
+    message: "✅ NEW OPTIONS API TESTING COMPLETE: All 6 NEW Options endpoints tested and working perfectly at https://neo-trader-sandbox.preview.emergentagent.com/api. 100% SUCCESS RATE: (1) Options Expiries: /api/options/expiries/{NIFTY/BANKNIFTY} returns 4 weekly expiry dates each. (2) Options Chain: /api/options/chain/{underlying}?strikes=N returns complete chain with spot_price, atm_strike, pcr, calls/puts arrays with ltp/iv/oi/delta/theta. (3) Options Signal: /api/options/signal/{underlying} returns direction/confidence/pcr/support/resistance/recommendation. (4) Options Quote: /api/options/quote/{underlying}/{strike}/{CE/PE} returns specific contract details. (5) Options Order: POST /api/options/order places simulation orders with order_id and lot calculations. (6) WebSocket Stats: /api/ws/stats returns connection statistics. All APIs implemented with proper options_chain.py and websocket_manager.py modules. Options pricing uses Black-Scholes approximation with Greeks calculation. System ready for Options trading in simulation mode."
