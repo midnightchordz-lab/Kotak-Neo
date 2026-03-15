@@ -586,8 +586,8 @@ class KotakNeoAPI:
         """
         Get real-time quotes for instruments using Kotak Neo API v2.
         
-        Based on official SDK and Migration Guide:
-        POST {baseUrl}/script-details/1.0/quotes/
+        The quotes endpoint is at the LOGIN_BASE_URL, not the trading baseUrl.
+        POST https://mis.kotaksecurities.com/script-details/1.0/quotes/
         
         Args:
             instrument_tokens: List of dicts with instrument_token and exchange_segment
@@ -595,18 +595,21 @@ class KotakNeoAPI:
             quote_type: ltp, market_depth, ohlc, 52w, circuit_limits, scrip_details, all
             is_index: Set to True for index instruments (NIFTY, BANKNIFTY)
         """
-        # Use the correct quotes endpoint: {baseUrl}/script-details/1.0/quotes/
-        if self.session.is_authenticated and self.session.base_url:
-            url = f'{self.session.base_url}/script-details/1.0/quotes/'
-            headers = self._get_auth_headers()
-        else:
-            # Fallback to login base URL
-            url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes/'
-            headers = self._get_quote_headers()
-            if self.session.view_token:
-                headers['session_token'] = self.session.view_token
-            if self.session.sid:
-                headers['sid'] = self.session.sid
+        # Quotes endpoint is at the LOGIN_BASE_URL (mis.kotaksecurities.com)
+        # NOT at the trading baseUrl (e41.kotaksecurities.com)
+        url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes/'
+        
+        # Use auth headers with session credentials
+        headers = {
+            'Content-Type': 'application/json',
+            'Authorization': self.consumer_key
+        }
+        
+        # Add session credentials if authenticated
+        if self.session.is_authenticated:
+            headers['sid'] = self.session.edit_sid
+            headers['Auth'] = self.session.edit_token
+            headers['neo-fin-key'] = self.session.neo_fin_key or self.DEFAULT_NEO_FIN_KEY
         
         body = {
             'instrument_tokens': instrument_tokens,
