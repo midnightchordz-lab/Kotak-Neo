@@ -35,6 +35,7 @@ from kotak_scrip_master import scrip_master, KotakScripMaster
 from live_price_poller import live_price_poller, get_live_poller
 from live_options_service import live_options_service, get_live_options_service
 from nse_options_service import nse_options_service, get_nse_options_service
+from kotak_options_service import kotak_options_service, get_kotak_options_service
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -167,6 +168,11 @@ async def login_mpin(request: LoginMPINRequest, background_tasks: BackgroundTask
     background_tasks.add_task(init_live_options)
     result['live_options'] = "Initializing..."
     
+    # Initialize Kotak options service with official API
+    kotak_options_service.set_kotak_api(kotak_api)
+    background_tasks.add_task(init_kotak_options)
+    result['kotak_options'] = "Initializing..."
+    
     return result
 
 async def start_live_poller():
@@ -181,6 +187,14 @@ async def init_live_options():
         logger.info(f"Live options initialized. NIFTY expiries: {live_options_service.nifty_expiries}")
     else:
         logger.warning("Live options initialization failed, will use calculated expiries")
+
+async def init_kotak_options():
+    """Initialize the Kotak options service with scripmaster"""
+    success = await kotak_options_service.fetch_scripmaster()
+    if success:
+        logger.info(f"Kotak options initialized. NIFTY expiries: {kotak_options_service.nifty_expiries[:5]}")
+    else:
+        logger.warning("Kotak options scripmaster fetch failed")
 
 @api_router.get("/auth/status")
 async def auth_status():
@@ -1194,12 +1208,31 @@ async def calculate_position_size(symbol: str, risk_percent: float = 1.0, capita
 
 @api_router.get("/options/expiries/{underlying}")
 async def get_options_expiries(underlying: str):
-    """Get available expiry dates for options - fetches real dates from NSE"""
+    """Get available expiry dates for options - fetches real dates from Kotak Scripmaster"""
     underlying_upper = underlying.upper()
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    # Try NSE first for real expiry dates
+    # Try Kotak official API first (scripmaster)
+    kotak_svc = get_kotak_options_service()
+    kotak_svc.set_kotak_api(kotak_api)
+    expiries = kotak_svc.get_expiries(underlying_upper)
+    
+    if not expiries:
+        # Fetch scripmaster if not already done
+        await kotak_svc.fetch_scripmaster()
+        expiries = kotak_svc.get_expiries(underlying_upper)
+    
+    if expiries:
+        return {
+            "success": True,
+            "underlying": underlying_upper,
+            "expiries": expiries,
+            "source": "kotak_scripmaster",
+            "last_updated": kotak_svc.last_scripmaster_update.isoformat() if kotak_svc.last_scripmaster_update else None
+        }
+    
+    # Fallback to NSE
     nse_service = get_nse_options_service()
     expiries = await nse_service.get_real_expiries(underlying_upper)
     
@@ -1212,43 +1245,65 @@ async def get_options_expiries(underlying: str):
             "last_updated": nse_service.last_updated.isoformat() if nse_service.last_updated else None
         }
     
-    # Fallback to calculated expiries if NSE fails
+    # Final fallback to calculated expiries
     opts_service = get_live_options_service()
-    expiries = opts_service.get_expiries(underlying_upper)
-    
-    if not expiries:
-        await opts_service.fetch_instruments()
-        expiries = opts_service.get_expiries(underlying_upper)
-    
-    if not expiries:
-        expiries = opts_service._generate_weekly_expiries(datetime.now().date(), 4)
-        source = "calculated"
-    else:
-        source = "kotak" if opts_service.last_updated else "cached"
+    expiries = opts_service._generate_weekly_expiries(datetime.now().date(), 4)
     
     return {
         "success": True,
         "underlying": underlying_upper,
         "expiries": expiries,
-        "source": source,
-        "last_updated": opts_service.last_updated.isoformat() if opts_service.last_updated else None
+        "source": "calculated",
+        "last_updated": None
     }
 
 @api_router.get("/options/chain/{underlying}")
 async def get_options_chain(underlying: str, expiry: Optional[str] = None, strikes: int = 15):
     """
-    Get complete options chain for an underlying with LIVE data from NSE
+    Get complete options chain for an underlying with LIVE data from Kotak API
+    
+    Uses official Kotak NEO API v2:
+    1. Scripmaster for real expiry dates and instrument tokens
+    2. Quotes API for live option prices
     
     Args:
         underlying: NIFTY or BANKNIFTY
-        expiry: Expiry date (NSE format like "20-Mar-2025"), uses nearest if not provided
+        expiry: Expiry date (YYYY-MM-DD format), uses nearest if not provided
         strikes: Number of strikes on each side of ATM (default 15)
     """
     underlying_upper = underlying.upper()
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    # Try NSE first for real live data
+    # Try Kotak official API first
+    kotak_svc = get_kotak_options_service()
+    kotak_svc.set_kotak_api(kotak_api)
+    
+    kotak_chain = await kotak_svc.build_options_chain(
+        underlying=underlying_upper,
+        expiry=expiry,
+        num_strikes=strikes
+    )
+    
+    if kotak_chain and kotak_chain.calls:
+        logger.info(f"Using KOTAK API data for {underlying_upper}, source: {kotak_chain.source}")
+        return {
+            "success": True,
+            "underlying": kotak_chain.underlying,
+            "spot_price": kotak_chain.spot_price,
+            "price_source": kotak_chain.source,
+            "expiry": kotak_chain.expiry,
+            "atm_strike": kotak_chain.atm_strike,
+            "pcr": kotak_chain.pcr,
+            "max_pain": kotak_chain.max_pain,
+            "timestamp": kotak_chain.timestamp,
+            "is_live": kotak_chain.is_live,
+            "calls": [asdict(c) for c in kotak_chain.calls],
+            "puts": [asdict(p) for p in kotak_chain.puts]
+        }
+    
+    # Fallback to NSE
+    logger.warning(f"Kotak API failed, trying NSE for {underlying_upper}")
     nse_service = get_nse_options_service()
     nse_chain = await nse_service.build_options_chain(
         symbol=underlying_upper,
@@ -1273,23 +1328,20 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
             "puts": [asdict(p) for p in nse_chain.puts]
         }
     
-    # Fallback to Kotak/simulation if NSE fails
-    logger.warning(f"NSE data not available, falling back to simulation for {underlying_upper}")
+    # Final fallback to simulation
+    logger.warning(f"All APIs failed, using simulation for {underlying_upper}")
     
-    # Try to get LIVE spot price - first from poller, then direct API
+    # Get spot price
     spot_price = None
-    price_source = "unknown"
+    price_source = "simulation"
     
-    # 1. Check live price poller cache first (fastest)
     poller = get_live_poller()
     if poller and poller.is_running:
         cached_price = poller.get_price(underlying_upper)
         if cached_price and cached_price.ltp > 0:
             spot_price = cached_price.ltp
             price_source = "live_poller"
-            logger.info(f"Using POLLER spot price for {underlying_upper}: {spot_price}")
     
-    # 2. Fall back to direct API call
     if not spot_price and kotak_api and kotak_api.session.is_authenticated:
         result = await kotak_api.get_index_quote(underlying_upper)
         if result.get('success') and result.get('quotes'):
@@ -1297,22 +1349,18 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
             if isinstance(quotes, list) and len(quotes) > 0:
                 spot_price = float(quotes[0].get('ltp', 0))
                 price_source = "live_api"
-                logger.info(f"Using LIVE API spot price for {underlying_upper}: {spot_price}")
     
-    # 3. Fallback to simulation price
     if not spot_price or spot_price <= 0:
         spot_price = simulator.get_ltp(underlying_upper)
         price_source = "simulation"
-        logger.info(f"Using SIMULATION spot price for {underlying_upper}: {spot_price}")
     
     if not spot_price:
         raise HTTPException(status_code=400, detail=f"No price data for {underlying_upper}")
     
-    # Use live options service to build the chain
+    # Use simulation chain
     opts_service = get_live_options_service()
     opts_service.set_kotak_api(kotak_api)
     
-    # Build options chain with live data
     chain = await opts_service.build_options_chain(
         underlying=underlying_upper,
         spot_price=spot_price,
