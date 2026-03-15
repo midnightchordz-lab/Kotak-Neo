@@ -44,19 +44,105 @@ class MarketSimulator:
         self.unrealized_pnl = 0
         self.realized_pnl = 0
         
-        # Initialize with NIFTY and BANKNIFTY
+        # Initialize with NIFTY, BANKNIFTY and popular stocks
         self.instruments = {
+            # Index F&O
             'NIFTY': {
                 'base_price': 24500,
                 'volatility': 0.001,
                 'lot_size': 25,
-                'token': 'NIFTY'
+                'token': 'NIFTY',
+                'segment': 'nse_fo',
+                'product_type': 'MIS'
             },
             'BANKNIFTY': {
                 'base_price': 52000,
                 'volatility': 0.0015,
                 'lot_size': 15,
-                'token': 'BANKNIFTY'
+                'token': 'BANKNIFTY',
+                'segment': 'nse_fo',
+                'product_type': 'MIS'
+            },
+            # Popular Stocks (Cash segment)
+            'RELIANCE': {
+                'base_price': 2450,
+                'volatility': 0.012,
+                'lot_size': 1,
+                'token': 'RELIANCE-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'TCS': {
+                'base_price': 4100,
+                'volatility': 0.008,
+                'lot_size': 1,
+                'token': 'TCS-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'INFY': {
+                'base_price': 1850,
+                'volatility': 0.01,
+                'lot_size': 1,
+                'token': 'INFY-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'HDFCBANK': {
+                'base_price': 1720,
+                'volatility': 0.009,
+                'lot_size': 1,
+                'token': 'HDFCBANK-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'ICICIBANK': {
+                'base_price': 1280,
+                'volatility': 0.01,
+                'lot_size': 1,
+                'token': 'ICICIBANK-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'SBIN': {
+                'base_price': 820,
+                'volatility': 0.012,
+                'lot_size': 1,
+                'token': 'SBIN-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'TATASTEEL': {
+                'base_price': 145,
+                'volatility': 0.015,
+                'lot_size': 1,
+                'token': 'TATASTEEL-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'ITC': {
+                'base_price': 480,
+                'volatility': 0.008,
+                'lot_size': 1,
+                'token': 'ITC-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'WIPRO': {
+                'base_price': 520,
+                'volatility': 0.011,
+                'lot_size': 1,
+                'token': 'WIPRO-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
+            },
+            'AXISBANK': {
+                'base_price': 1150,
+                'volatility': 0.011,
+                'lot_size': 1,
+                'token': 'AXISBANK-EQ',
+                'segment': 'nse_cm',
+                'product_type': 'CNC'
             }
         }
         

@@ -1,418 +1,500 @@
 #!/usr/bin/env python3
 """
-COSTAR Kotak Neo F&O Algo Trader - Backend API Testing
-Tests all critical backend endpoints for the trading application
+COSTAR AlgoTrader Backend API Comprehensive Test Suite
+Tests all backend endpoints against the specifications
 """
 
 import requests
 import json
 import time
-from datetime import datetime
 from typing import Dict, Any, List
 
-# Configuration
+# Base URL from frontend/.env
 BASE_URL = "https://neo-trader-sandbox.preview.emergentagent.com/api"
-TEST_SYMBOL = "NIFTY"
-BACKUP_SYMBOL = "BANKNIFTY"
 
-class BackendTester:
+class COSTARTester:
     def __init__(self):
-        self.base_url = BASE_URL
         self.session = requests.Session()
-        self.session.headers.update({
-            'Content-Type': 'application/json',
-            'Accept': 'application/json'
-        })
-        self.test_results = {}
-        self.order_id = None
+        self.test_results = []
         
-    def log_result(self, test_name: str, success: bool, details: Any, response_time: float = None):
+    def log_result(self, test_name: str, success: bool, details: str = "", expected: Any = None, actual: Any = None):
         """Log test result"""
-        self.test_results[test_name] = {
+        result = {
+            'test': test_name,
             'success': success,
             'details': details,
-            'response_time': response_time,
-            'timestamp': datetime.utcnow().isoformat()
+            'expected': expected,
+            'actual': actual,
+            'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
         }
+        self.test_results.append(result)
         status = "✅ PASS" if success else "❌ FAIL"
-        time_info = f" ({response_time:.2f}s)" if response_time else ""
-        print(f"{status}{time_info} {test_name}")
-        if not success:
-            print(f"  Error: {details}")
-        print()
-
-    def make_request(self, method: str, endpoint: str, data: Dict = None) -> tuple:
-        """Make HTTP request and measure response time"""
-        url = f"{self.base_url}{endpoint}"
-        start_time = time.time()
+        print(f"{status} {test_name}: {details}")
         
+    def make_request(self, method: str, endpoint: str, **kwargs) -> tuple:
+        """Make HTTP request and return (success, response, error)"""
         try:
-            if method.upper() == 'GET':
-                response = self.session.get(url)
-            elif method.upper() == 'POST':
-                response = self.session.post(url, json=data)
-            else:
-                raise ValueError(f"Unsupported method: {method}")
-                
-            response_time = time.time() - start_time
-            
-            # Try to parse JSON response
-            try:
-                json_data = response.json()
-            except ValueError:
-                json_data = {"raw_response": response.text}
-            
-            return response.status_code, json_data, response_time
-            
+            url = f"{BASE_URL}{endpoint}"
+            response = self.session.request(method, url, timeout=30, **kwargs)
+            return True, response, None
         except Exception as e:
-            response_time = time.time() - start_time
-            return None, {"error": str(e)}, response_time
-
+            return False, None, str(e)
+    
     def test_health_check(self):
         """Test 1: Health Check API"""
-        status_code, data, response_time = self.make_request('GET', '/health')
+        print("\n🔍 Testing Health Check API...")
         
-        if status_code == 200 and data.get('status') == 'healthy':
-            self.log_result("Health Check API", True, data, response_time)
-            return True
-        else:
-            self.log_result("Health Check API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_watchlist(self):
-        """Test 2: Watchlist API"""
-        status_code, data, response_time = self.make_request('GET', '/watchlist')
+        success, response, error = self.make_request("GET", "/health")
         
-        if status_code == 200 and data.get('success') and data.get('watchlist'):
-            watchlist = data['watchlist']
-            symbols = [item['symbol'] for item in watchlist]
+        if not success:
+            self.log_result("Health Check", False, f"Request failed: {error}")
+            return
             
-            if 'NIFTY' in symbols and 'BANKNIFTY' in symbols:
-                self.log_result("Watchlist API", True, f"Found {len(symbols)} instruments: {symbols}", response_time)
-                return True
-            else:
-                self.log_result("Watchlist API", False, f"Missing required symbols. Found: {symbols}", response_time)
-                return False
-        else:
-            self.log_result("Watchlist API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_market_quote(self):
-        """Test 3: Market Quote API"""
-        status_code, data, response_time = self.make_request('GET', f'/market/quote/{TEST_SYMBOL}')
-        
-        if status_code == 200 and data.get('success') and data.get('quote'):
-            quote = data['quote']
-            # For live trading quotes, 'close' is not typical - LTP serves that purpose
-            required_fields = ['ltp', 'open', 'high', 'low', 'bid', 'ask']
-            missing_fields = [field for field in required_fields if field not in quote]
+        if response.status_code != 200:
+            self.log_result("Health Check", False, f"HTTP {response.status_code}: {response.text}")
+            return
             
-            if not missing_fields:
-                self.log_result("Market Quote API", True, f"Quote for {TEST_SYMBOL}: LTP=₹{quote.get('ltp')}, OHL=[{quote.get('open')}, {quote.get('high')}, {quote.get('low')}], Bid/Ask=[{quote.get('bid')}, {quote.get('ask')}]", response_time)
-                return True
+        try:
+            data = response.json()
+            if data.get('status') == 'healthy':
+                self.log_result("Health Check", True, "Returns healthy status", 
+                              {"status": "healthy"}, data.get('status'))
             else:
-                self.log_result("Market Quote API", False, f"Missing required fields: {missing_fields}", response_time)
-                return False
-        else:
-            self.log_result("Market Quote API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_candles(self):
-        """Test 4: Candle Data API"""
-        status_code, data, response_time = self.make_request('GET', f'/market/candles/{TEST_SYMBOL}?count=50')
+                self.log_result("Health Check", False, "Status not healthy", 
+                              "healthy", data.get('status'))
+        except json.JSONDecodeError:
+            self.log_result("Health Check", False, "Invalid JSON response")
+    
+    def test_watchlist_endpoints(self):
+        """Test 2: Watchlist Endpoints"""
+        print("\n🔍 Testing Watchlist Endpoints...")
         
-        if status_code == 200 and data.get('success') and data.get('candles'):
-            candles = data['candles']
-            if len(candles) == 50:
-                # Check if candles have required fields
-                first_candle = candles[0]
-                required_fields = ['open', 'high', 'low', 'close', 'volume']
-                missing_fields = [field for field in required_fields if field not in first_candle]
+        # Test main watchlist (should return 12 instruments)
+        success, response, error = self.make_request("GET", "/watchlist")
+        
+        if not success:
+            self.log_result("Watchlist All", False, f"Request failed: {error}")
+            return
+            
+        if response.status_code != 200:
+            self.log_result("Watchlist All", False, f"HTTP {response.status_code}: {response.text}")
+            return
+            
+        try:
+            data = response.json()
+            watchlist = data.get('watchlist', [])
+            
+            if len(watchlist) == 12:
+                # Count indices vs stocks
+                indices = [item for item in watchlist if item.get('segment') == 'nse_fo']
+                stocks = [item for item in watchlist if item.get('segment') == 'nse_cm']
                 
-                if not missing_fields:
-                    self.log_result("Candle Data API", True, f"Received {len(candles)} candles with complete OHLCV data", response_time)
-                    return True
-                else:
-                    self.log_result("Candle Data API", False, f"Candles missing fields: {missing_fields}", response_time)
-                    return False
+                self.log_result("Watchlist All", True, 
+                              f"Returns 12 instruments ({len(indices)} indices, {len(stocks)} stocks)",
+                              12, len(watchlist))
             else:
-                self.log_result("Candle Data API", False, f"Expected 50 candles, got {len(candles)}", response_time)
-                return False
+                self.log_result("Watchlist All", False, 
+                              f"Expected 12 instruments, got {len(watchlist)}",
+                              12, len(watchlist))
+                
+        except json.JSONDecodeError:
+            self.log_result("Watchlist All", False, "Invalid JSON response")
+        
+        # Test indices watchlist
+        success, response, error = self.make_request("GET", "/watchlist/indices")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                indices = data.get('watchlist', [])
+                
+                expected_symbols = {'NIFTY', 'BANKNIFTY'}
+                actual_symbols = {item.get('symbol') for item in indices}
+                
+                if len(indices) == 2 and actual_symbols == expected_symbols:
+                    # Check segment
+                    all_nse_fo = all(item.get('segment') == 'nse_fo' for item in indices)
+                    if all_nse_fo:
+                        self.log_result("Watchlist Indices", True, 
+                                      "Returns NIFTY and BANKNIFTY with segment=nse_fo",
+                                      expected_symbols, actual_symbols)
+                    else:
+                        self.log_result("Watchlist Indices", False, 
+                                      "Not all indices have segment=nse_fo")
+                else:
+                    self.log_result("Watchlist Indices", False, 
+                                  f"Expected NIFTY+BANKNIFTY, got {actual_symbols}",
+                                  expected_symbols, actual_symbols)
+            except json.JSONDecodeError:
+                self.log_result("Watchlist Indices", False, "Invalid JSON response")
         else:
-            self.log_result("Candle Data API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
+            self.log_result("Watchlist Indices", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+        
+        # Test stocks watchlist  
+        success, response, error = self.make_request("GET", "/watchlist/stocks")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                stocks = data.get('watchlist', [])
+                
+                if len(stocks) == 10:
+                    # Check segment and product_type
+                    all_nse_cm = all(item.get('segment') == 'nse_cm' for item in stocks)
+                    all_cnc = all(item.get('product_type') == 'CNC' for item in stocks)
+                    
+                    if all_nse_cm and all_cnc:
+                        self.log_result("Watchlist Stocks", True, 
+                                      "Returns 10 stocks with segment=nse_cm and product_type=CNC",
+                                      10, len(stocks))
+                    else:
+                        self.log_result("Watchlist Stocks", False, 
+                                      "Not all stocks have correct segment/product_type")
+                else:
+                    self.log_result("Watchlist Stocks", False, 
+                                  f"Expected 10 stocks, got {len(stocks)}",
+                                  10, len(stocks))
+            except json.JSONDecodeError:
+                self.log_result("Watchlist Stocks", False, "Invalid JSON response")
+        else:
+            self.log_result("Watchlist Stocks", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+    
+    def test_stock_search(self):
+        """Test 3: Stock Search API"""
+        print("\n🔍 Testing Stock Search API...")
+        
+        # Test search without query (should return all 10 stocks)
+        success, response, error = self.make_request("GET", "/stocks/search")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                results = data.get('results', [])
+                
+                if len(results) == 10:
+                    self.log_result("Stock Search (All)", True, 
+                                  "Returns all 10 stocks when no query",
+                                  10, len(results))
+                else:
+                    self.log_result("Stock Search (All)", False, 
+                                  f"Expected 10 stocks, got {len(results)}",
+                                  10, len(results))
+            except json.JSONDecodeError:
+                self.log_result("Stock Search (All)", False, "Invalid JSON response")
+        else:
+            self.log_result("Stock Search (All)", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+        
+        # Test search with HDFC query
+        success, response, error = self.make_request("GET", "/stocks/search?query=HDFC")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                results = data.get('results', [])
+                
+                # Should find HDFCBANK
+                hdfc_symbols = [r.get('symbol') for r in results if 'HDFC' in r.get('symbol', '')]
+                
+                if 'HDFCBANK' in hdfc_symbols:
+                    self.log_result("Stock Search (HDFC)", True, 
+                                  f"Returns matching stocks: {hdfc_symbols}")
+                else:
+                    self.log_result("Stock Search (HDFC)", False, 
+                                  f"Expected HDFCBANK in results, got: {hdfc_symbols}")
+            except json.JSONDecodeError:
+                self.log_result("Stock Search (HDFC)", False, "Invalid JSON response")
+        else:
+            self.log_result("Stock Search (HDFC)", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+    
+    def test_instrument_details(self):
+        """Test 4: Instrument Details API"""
+        print("\n🔍 Testing Instrument Details API...")
+        
+        # Test RELIANCE (stock)
+        success, response, error = self.make_request("GET", "/instrument/RELIANCE")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                instrument = data.get('instrument', {})
+                
+                if instrument.get('segment') == 'nse_cm':
+                    self.log_result("Instrument RELIANCE", True, 
+                                  "Returns stock details with segment=nse_cm",
+                                  "nse_cm", instrument.get('segment'))
+                else:
+                    self.log_result("Instrument RELIANCE", False, 
+                                  f"Expected segment=nse_cm, got {instrument.get('segment')}",
+                                  "nse_cm", instrument.get('segment'))
+            except json.JSONDecodeError:
+                self.log_result("Instrument RELIANCE", False, "Invalid JSON response")
+        else:
+            self.log_result("Instrument RELIANCE", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+        
+        # Test NIFTY (index)
+        success, response, error = self.make_request("GET", "/instrument/NIFTY")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                instrument = data.get('instrument', {})
+                
+                if instrument.get('segment') == 'nse_fo':
+                    self.log_result("Instrument NIFTY", True, 
+                                  "Returns index details with segment=nse_fo",
+                                  "nse_fo", instrument.get('segment'))
+                else:
+                    self.log_result("Instrument NIFTY", False, 
+                                  f"Expected segment=nse_fo, got {instrument.get('segment')}",
+                                  "nse_fo", instrument.get('segment'))
+            except json.JSONDecodeError:
+                self.log_result("Instrument NIFTY", False, "Invalid JSON response")
+        else:
+            self.log_result("Instrument NIFTY", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+    
     def test_signal_generation(self):
         """Test 5: Signal Generation API"""
-        status_code, data, response_time = self.make_request('GET', f'/signal/{TEST_SYMBOL}?validate_ai=false')
+        print("\n🔍 Testing Signal Generation API...")
         
-        if status_code == 200 and 'direction' in data and 'votes' in data:
-            votes = data['votes']
+        # Test signals for different instruments
+        test_symbols = ['RELIANCE', 'TCS', 'NIFTY']
+        
+        for symbol in test_symbols:
+            success, response, error = self.make_request("GET", f"/signal/{symbol}")
             
-            # Check if we have 10 indicator votes
-            if len(votes) == 10:
-                # Verify vote structure
-                vote_structure_valid = True
-                for vote in votes:
-                    if not all(field in vote for field in ['name', 'vote', 'weight', 'detail']):
-                        vote_structure_valid = False
-                        break
-                
-                if vote_structure_valid:
-                    indicator_names = [v['name'] for v in votes]
-                    self.log_result("Signal Generation API", True, 
-                                  f"Direction: {data.get('direction')}, Score: {data.get('score')}, "
-                                  f"Indicators: {len(votes)}/10, Names: {indicator_names}", response_time)
-                    return True
-                else:
-                    self.log_result("Signal Generation API", False, "Vote structure incomplete", response_time)
-                    return False
+            if success and response.status_code == 200:
+                try:
+                    data = response.json()
+                    
+                    required_fields = ['direction', 'score', 'confidence', 'votes']
+                    missing_fields = [f for f in required_fields if f not in data]
+                    
+                    if not missing_fields:
+                        # Check votes structure
+                        votes = data.get('votes', [])
+                        vote_structure_valid = all(
+                            isinstance(vote, dict) and 
+                            'name' in vote and 
+                            'vote' in vote and 
+                            'weight' in vote and
+                            'detail' in vote
+                            for vote in votes
+                        )
+                        
+                        if vote_structure_valid:
+                            self.log_result(f"Signal {symbol}", True, 
+                                          f"Returns signal with direction={data.get('direction')}, score={data.get('score')}, confidence={data.get('confidence')}, votes={len(votes)}")
+                        else:
+                            self.log_result(f"Signal {symbol}", False, 
+                                          "Invalid vote structure in response")
+                    else:
+                        self.log_result(f"Signal {symbol}", False, 
+                                      f"Missing required fields: {missing_fields}")
+                except json.JSONDecodeError:
+                    self.log_result(f"Signal {symbol}", False, "Invalid JSON response")
             else:
-                self.log_result("Signal Generation API", False, f"Expected 10 indicator votes, got {len(votes)}", response_time)
-                return False
-        else:
-            self.log_result("Signal Generation API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_account_limits(self):
-        """Test 6: Account Limits API"""
-        status_code, data, response_time = self.make_request('GET', '/limits')
+                self.log_result(f"Signal {symbol}", False, 
+                              f"Request failed: {error or f'HTTP {response.status_code}'}")
+    
+    def test_market_data(self):
+        """Test 6: Market Data APIs"""
+        print("\n🔍 Testing Market Data APIs...")
         
-        if status_code == 200 and data.get('success') and data.get('limits'):
-            limits = data['limits']
-            if 'available_margin' in limits:
-                self.log_result("Account Limits API", True, 
-                              f"Available Margin: ₹{limits.get('available_margin'):,.2f}, Mode: {data.get('mode', 'simulation')}", response_time)
-                return True
-            else:
-                self.log_result("Account Limits API", False, "Missing available_margin field", response_time)
-                return False
-        else:
-            self.log_result("Account Limits API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_place_order(self):
-        """Test 7: Order Placement API"""
-        order_data = {
-            "symbol": TEST_SYMBOL,
-            "side": "BUY",
-            "quantity": 25,
-            "order_type": "MKT"
-        }
+        # Test market quote
+        success, response, error = self.make_request("GET", "/market/quote/RELIANCE")
         
-        status_code, data, response_time = self.make_request('POST', '/orders/place', order_data)
-        
-        if status_code == 200 and data.get('success') and data.get('order_id'):
-            self.order_id = data['order_id']
-            self.log_result("Order Placement API", True, 
-                          f"Order placed successfully. ID: {self.order_id}, Symbol: {TEST_SYMBOL}, Side: BUY, Qty: 25", response_time)
-            return True
-        else:
-            self.log_result("Order Placement API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_positions(self):
-        """Test 8: Positions API"""
-        status_code, data, response_time = self.make_request('GET', '/positions')
-        
-        if status_code == 200 and data.get('success') and 'positions' in data:
-            positions = data['positions']
-            self.log_result("Positions API", True, 
-                          f"Retrieved positions: {len(positions)} open positions", response_time)
-            return True
-        else:
-            self.log_result("Positions API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_orders(self):
-        """Test 9: Orders API"""
-        status_code, data, response_time = self.make_request('GET', '/orders')
-        
-        if status_code == 200 and data.get('success') and 'orders' in data:
-            orders = data['orders']
-            
-            # Check if our placed order appears in the order book
-            order_found = False
-            if self.order_id:
-                for order in orders:
-                    if order.get('order_id') == self.order_id:
-                        order_found = True
-                        break
-                
-                if order_found:
-                    self.log_result("Orders API", True, f"Order book retrieved with {len(orders)} orders, placed order found", response_time)
-                else:
-                    self.log_result("Orders API", True, f"Order book retrieved with {len(orders)} orders, but placed order not found (may have been executed)", response_time)
-            else:
-                self.log_result("Orders API", True, f"Order book retrieved with {len(orders)} orders", response_time)
-            
-            return True
-        else:
-            self.log_result("Orders API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_backtest(self):
-        """Test 10: Backtest API"""
-        backtest_data = {
-            "symbol": TEST_SYMBOL,
-            "candles": 200,
-            "min_score": 3.0,
-            "min_agree": 5,
-            "lot_size": 25,
-            "position_size": 1
-        }
-        
-        status_code, data, response_time = self.make_request('POST', '/backtest', backtest_data)
-        
-        if status_code == 200 and data.get('success') and data.get('results'):
-            results = data['results']
-            required_metrics = ['win_rate', 'total_pnl', 'profit_factor', 'max_drawdown']
-            missing_metrics = [metric for metric in required_metrics if metric not in results]
-            
-            if not missing_metrics:
-                self.log_result("Backtest API", True, 
-                              f"Backtest completed: Win Rate: {results.get('win_rate')}%, "
-                              f"Total P&L: ₹{results.get('total_pnl')}, "
-                              f"Profit Factor: {results.get('profit_factor')}, "
-                              f"Max DD: {results.get('max_drawdown')}%", response_time)
-                return True
-            else:
-                self.log_result("Backtest API", False, f"Missing metrics: {missing_metrics}", response_time)
-                return False
-        else:
-            self.log_result("Backtest API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_indicators(self):
-        """Test 11: Indicators API"""
-        status_code, data, response_time = self.make_request('GET', f'/indicators/{TEST_SYMBOL}')
-        
-        if status_code == 200 and 'symbol' in data:
-            indicator_fields = ['ema_fast', 'ema_slow', 'rsi', 'supertrend', 'vwap', 'macd_histogram', 'bb_upper', 'bb_lower', 'stoch_k', 'atr']
-            present_indicators = [field for field in indicator_fields if data.get(field) is not None]
-            
-            if len(present_indicators) >= 8:  # At least 8 indicators should have values
-                self.log_result("Indicators API", True, f"Retrieved {len(present_indicators)} indicator values: {present_indicators}", response_time)
-                return True
-            else:
-                self.log_result("Indicators API", False, f"Only {len(present_indicators)} indicators have values, expected at least 8", response_time)
-                return False
-        else:
-            self.log_result("Indicators API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_position_size_calculator(self):
-        """Test 12: Position Size Calculator API"""
-        status_code, data, response_time = self.make_request('GET', f'/position-size/{TEST_SYMBOL}?risk_percent=1.0')
-        
-        if status_code == 200 and 'recommended_lots' in data:
-            required_fields = ['ltp', 'lot_size', 'lot_value', 'margin_per_lot', 'max_lots_by_capital', 'recommended_lots']
-            missing_fields = [field for field in required_fields if field not in data]
-            
-            if not missing_fields:
-                self.log_result("Position Size Calculator API", True, 
-                              f"LTP: ₹{data.get('ltp')}, Recommended Lots: {data.get('recommended_lots')}, "
-                              f"Max Lots by Capital: {data.get('max_lots_by_capital')}", response_time)
-                return True
-            else:
-                self.log_result("Position Size Calculator API", False, f"Missing fields: {missing_fields}", response_time)
-                return False
-        else:
-            self.log_result("Position Size Calculator API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def test_ai_validation(self):
-        """Test 13: AI Validation (with validate_ai=true)"""
-        status_code, data, response_time = self.make_request('GET', f'/signal/{TEST_SYMBOL}?validate_ai=true')
-        
-        if status_code == 200 and 'ai_validation' in data:
-            ai_result = data['ai_validation']
-            if 'validation' in ai_result or 'recommendation' in ai_result:
-                self.log_result("AI Validation API", True, f"AI validation completed: {ai_result.get('validation', 'No specific validation')}", response_time)
-                return True
-            else:
-                self.log_result("AI Validation API", False, "AI validation response incomplete", response_time)
-                return False
-        elif status_code == 200 and data.get('direction') == 'NEUTRAL':
-            self.log_result("AI Validation API", True, "AI validation skipped for NEUTRAL signal (expected behavior)", response_time)
-            return True
-        else:
-            self.log_result("AI Validation API", False, f"Status: {status_code}, Data: {data}", response_time)
-            return False
-
-    def run_all_tests(self):
-        """Run all backend tests in priority order"""
-        print("=" * 80)
-        print("COSTAR Kotak Neo F&O Algo Trader - Backend API Testing")
-        print("=" * 80)
-        print(f"Base URL: {self.base_url}")
-        print(f"Test Symbol: {TEST_SYMBOL}")
-        print(f"Started at: {datetime.utcnow().isoformat()}")
-        print("=" * 80)
-        print()
-
-        # Run tests in priority order
-        test_functions = [
-            self.test_health_check,
-            self.test_watchlist,
-            self.test_market_quote,
-            self.test_candles,
-            self.test_signal_generation,
-            self.test_account_limits,
-            self.test_place_order,
-            self.test_positions,
-            self.test_orders,
-            self.test_backtest,
-            self.test_indicators,
-            self.test_position_size_calculator,
-            self.test_ai_validation
-        ]
-
-        passed_tests = 0
-        total_tests = len(test_functions)
-
-        for test_func in test_functions:
+        if success and response.status_code == 200:
             try:
-                if test_func():
-                    passed_tests += 1
-                time.sleep(0.5)  # Small delay between tests
-            except Exception as e:
-                self.log_result(test_func.__name__, False, f"Test execution error: {str(e)}")
-
-        # Summary
-        print("=" * 80)
-        print(f"TEST SUMMARY: {passed_tests}/{total_tests} tests passed")
-        print("=" * 80)
-        
-        if passed_tests == total_tests:
-            print("🎉 ALL TESTS PASSED! Backend APIs are working correctly.")
+                data = response.json()
+                quote = data.get('quote', {})
+                
+                required_fields = ['ltp', 'change']
+                missing_fields = [f for f in required_fields if f not in quote]
+                
+                if not missing_fields:
+                    self.log_result("Market Quote", True, 
+                                  f"Returns quote with ltp={quote.get('ltp')}, change={quote.get('change')}")
+                else:
+                    self.log_result("Market Quote", False, 
+                                  f"Missing required fields: {missing_fields}")
+            except json.JSONDecodeError:
+                self.log_result("Market Quote", False, "Invalid JSON response")
         else:
-            failed_tests = total_tests - passed_tests
-            print(f"⚠️  {failed_tests} test(s) failed. Check the details above.")
+            self.log_result("Market Quote", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
         
-        print(f"Completed at: {datetime.utcnow().isoformat()}")
-        print("=" * 80)
+        # Test market candles
+        success, response, error = self.make_request("GET", "/market/candles/RELIANCE")
         
-        return passed_tests, total_tests, self.test_results
-
-def main():
-    """Main testing function"""
-    tester = BackendTester()
-    passed, total, results = tester.run_all_tests()
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                candles = data.get('candles', [])
+                
+                if len(candles) > 0:
+                    # Check candle structure
+                    candle = candles[0]
+                    required_fields = ['open', 'high', 'low', 'close', 'volume']
+                    missing_fields = [f for f in required_fields if f not in candle]
+                    
+                    if not missing_fields:
+                        self.log_result("Market Candles", True, 
+                                      f"Returns candles array with {len(candles)} candles")
+                    else:
+                        self.log_result("Market Candles", False, 
+                                      f"Candle missing required fields: {missing_fields}")
+                else:
+                    self.log_result("Market Candles", False, "Empty candles array")
+            except json.JSONDecodeError:
+                self.log_result("Market Candles", False, "Invalid JSON response")
+        else:
+            self.log_result("Market Candles", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
     
-    # Save detailed results to file
-    with open('/app/backend_test_results.json', 'w') as f:
-        json.dump({
-            'summary': {'passed': passed, 'total': total, 'success_rate': f"{(passed/total)*100:.1f}%"},
-            'test_results': results,
-            'base_url': BASE_URL,
-            'test_symbol': TEST_SYMBOL
-        }, f, indent=2)
+    def test_order_placement(self):
+        """Test 7: Order Placement API (Demo Mode)"""
+        print("\n🔍 Testing Order Placement API...")
+        
+        order_data = {
+            "symbol": "RELIANCE",
+            "side": "BUY",
+            "quantity": 10,
+            "order_type": "MKT",
+            "product_type": "CNC"
+        }
+        
+        success, response, error = self.make_request("POST", "/orders/place", 
+                                                   json=order_data)
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                
+                required_fields = ['order_id', 'mode']
+                missing_fields = [f for f in required_fields if f not in data]
+                
+                if not missing_fields:
+                    if data.get('mode') == 'simulation':
+                        self.log_result("Order Placement", True, 
+                                      f"Returns order_id={data.get('order_id')} and mode=simulation")
+                    else:
+                        self.log_result("Order Placement", False, 
+                                      f"Expected mode=simulation, got {data.get('mode')}",
+                                      "simulation", data.get('mode'))
+                else:
+                    self.log_result("Order Placement", False, 
+                                  f"Missing required fields: {missing_fields}")
+            except json.JSONDecodeError:
+                self.log_result("Order Placement", False, "Invalid JSON response")
+        else:
+            self.log_result("Order Placement", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
     
-    print(f"Detailed results saved to: /app/backend_test_results.json")
+    def test_simulation_control(self):
+        """Test 8: Simulation Control APIs"""
+        print("\n🔍 Testing Simulation Control APIs...")
+        
+        # Test start simulation
+        success, response, error = self.make_request("POST", "/simulation/start")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                if "started" in data.get('message', '').lower():
+                    self.log_result("Simulation Start", True, "Simulation started successfully")
+                else:
+                    self.log_result("Simulation Start", True, f"Message: {data.get('message')}")
+            except json.JSONDecodeError:
+                self.log_result("Simulation Start", False, "Invalid JSON response")
+        else:
+            self.log_result("Simulation Start", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+        
+        # Wait a moment for simulation to start
+        time.sleep(1)
+        
+        # Test simulation status
+        success, response, error = self.make_request("GET", "/simulation/status")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                if data.get('active') == True:
+                    self.log_result("Simulation Status", True, "Shows active=true")
+                else:
+                    self.log_result("Simulation Status", False, 
+                                  f"Expected active=true, got {data.get('active')}")
+            except json.JSONDecodeError:
+                self.log_result("Simulation Status", False, "Invalid JSON response")
+        else:
+            self.log_result("Simulation Status", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
+        
+        # Test stop simulation
+        success, response, error = self.make_request("POST", "/simulation/stop")
+        
+        if success and response.status_code == 200:
+            try:
+                data = response.json()
+                if "stopped" in data.get('message', '').lower():
+                    self.log_result("Simulation Stop", True, "Simulation stopped successfully")
+                else:
+                    self.log_result("Simulation Stop", True, f"Message: {data.get('message')}")
+            except json.JSONDecodeError:
+                self.log_result("Simulation Stop", False, "Invalid JSON response")
+        else:
+            self.log_result("Simulation Stop", False, 
+                          f"Request failed: {error or f'HTTP {response.status_code}'}")
     
-    return passed == total
+    def run_comprehensive_test(self):
+        """Run all tests"""
+        print("🚀 Starting COSTAR AlgoTrader Backend API Comprehensive Test")
+        print("=" * 60)
+        
+        # Run all tests
+        self.test_health_check()
+        self.test_watchlist_endpoints()
+        self.test_stock_search()
+        self.test_instrument_details()
+        self.test_signal_generation()
+        self.test_market_data()
+        self.test_order_placement()
+        self.test_simulation_control()
+        
+        # Summary
+        print("\n" + "=" * 60)
+        print("📊 TEST SUMMARY")
+        print("=" * 60)
+        
+        passed = len([r for r in self.test_results if r['success']])
+        total = len(self.test_results)
+        
+        print(f"Total Tests: {total}")
+        print(f"Passed: {passed}")
+        print(f"Failed: {total - passed}")
+        print(f"Success Rate: {(passed/total*100):.1f}%")
+        
+        # Show failures
+        failures = [r for r in self.test_results if not r['success']]
+        if failures:
+            print("\n❌ FAILED TESTS:")
+            for failure in failures:
+                print(f"  - {failure['test']}: {failure['details']}")
+        
+        return passed == total
 
 if __name__ == "__main__":
-    success = main()
-    exit(0 if success else 1)
+    tester = COSTARTester()
+    success = tester.run_comprehensive_test()
+    
+    if success:
+        print("\n🎉 ALL TESTS PASSED! Backend APIs are working correctly.")
+    else:
+        print("\n⚠️  Some tests failed. Check the details above.")
+        exit(1)

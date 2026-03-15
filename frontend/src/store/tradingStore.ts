@@ -104,6 +104,16 @@ export interface BacktestResult {
   profit_factor: number | string;
 }
 
+export interface WatchlistItem {
+  symbol: string;
+  ltp: number;
+  change: number;
+  change_percent: number;
+  lot_size: number;
+  segment: string;
+  product_type: string;
+}
+
 interface TradingStore {
   // State
   selectedSymbol: string;
@@ -119,6 +129,8 @@ interface TradingStore {
   simulationActive: boolean;
   backtestResult: BacktestResult | null;
   activeTab: string;
+  stocksWatchlist: WatchlistItem[];
+  indicesWatchlist: WatchlistItem[];
   
   // Actions
   setSelectedSymbol: (symbol: string) => void;
@@ -129,7 +141,9 @@ interface TradingStore {
   fetchPositions: () => Promise<void>;
   fetchOrders: () => Promise<void>;
   fetchLimits: () => Promise<void>;
-  placeOrder: (side: string, quantity: number, orderType?: string, price?: number) => Promise<any>;
+  fetchStocksWatchlist: () => Promise<void>;
+  fetchIndicesWatchlist: () => Promise<void>;
+  placeOrder: (side: string, quantity: number, orderType?: string, price?: number, productType?: string) => Promise<any>;
   cancelOrder: (orderId: string) => Promise<any>;
   startSimulation: () => Promise<void>;
   stopSimulation: () => Promise<void>;
@@ -152,6 +166,8 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
   simulationActive: false,
   backtestResult: null,
   activeTab: 'signal',
+  stocksWatchlist: [],
+  indicesWatchlist: [],
 
   // Actions
   setSelectedSymbol: (symbol) => set({ selectedSymbol: symbol }),
@@ -225,7 +241,29 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
     }
   },
 
-  placeOrder: async (side, quantity, orderType = 'MKT', price = 0) => {
+  fetchStocksWatchlist: async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/watchlist/stocks`);
+      if (response.data.success) {
+        set({ stocksWatchlist: response.data.watchlist });
+      }
+    } catch (error: any) {
+      console.error('Fetch stocks watchlist error:', error.message);
+    }
+  },
+
+  fetchIndicesWatchlist: async () => {
+    try {
+      const response = await axios.get(`${API_URL}/api/watchlist/indices`);
+      if (response.data.success) {
+        set({ indicesWatchlist: response.data.watchlist });
+      }
+    } catch (error: any) {
+      console.error('Fetch indices watchlist error:', error.message);
+    }
+  },
+
+  placeOrder: async (side, quantity, orderType = 'MKT', price = 0, productType = 'MIS') => {
     try {
       const { selectedSymbol } = get();
       const response = await axios.post(`${API_URL}/api/orders/place`, {
@@ -233,7 +271,8 @@ export const useTradingStore = create<TradingStore>((set, get) => ({
         side,
         quantity,
         order_type: orderType,
-        price
+        price,
+        product_type: productType
       });
       
       // Refresh orders and positions

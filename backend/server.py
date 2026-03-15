@@ -72,6 +72,7 @@ class OrderRequest(BaseModel):
     order_type: str = "MKT"  # MKT, LIMIT, SL
     price: float = 0
     trigger_price: float = 0
+    product_type: str = "MIS"  # MIS for intraday F&O, CNC for delivery stocks, NRML for carry forward
 
 class ModifyOrderRequest(BaseModel):
     order_no: str
@@ -348,31 +349,46 @@ async def get_indicators(symbol: str):
 @api_router.post("/orders/place")
 async def place_order(request: OrderRequest):
     """Place a new order"""
+    symbol_upper = request.symbol.upper()
+    
+    # Get instrument info for proper product type
+    instrument = simulator.instruments.get(symbol_upper)
+    if not instrument:
+        raise HTTPException(status_code=404, detail=f"Symbol {symbol_upper} not found")
+    
+    # Determine exchange segment and product type
+    segment = instrument.get('segment', 'nse_fo')
+    default_product = instrument.get('product_type', 'MIS')
+    product_type = request.product_type or default_product
+    
     # Try live API first
     if kotak_api and kotak_api.session.is_authenticated:
         order_data = {
-            "es": "nse_fo",
-            "ts": request.symbol,
-            "tt": "B" if request.side == "BUY" else "S",
-            "qt": str(request.quantity),
-            "pt": "MIS",
-            "pc": request.order_type,
-            "pr": str(request.price) if request.order_type != "MKT" else "0",
-            "tp": str(request.trigger_price) if request.order_type == "SL" else "0",
-            "am": "N"
+            "exchange_segment": segment,
+            "trading_symbol": symbol_upper,
+            "transaction_type": "B" if request.side == "BUY" else "S",
+            "quantity": str(request.quantity),
+            "product": product_type,
+            "order_type": request.order_type,
+            "price": str(request.price) if request.order_type != "MKT" else "0",
+            "trigger_price": str(request.trigger_price) if request.order_type == "SL" else "0",
+            "validity": "DAY",
+            "amo": "NO"
         }
         result = await kotak_api.place_order(order_data)
         return result
     
     # Use simulation
     result = simulator.place_order(
-        symbol=request.symbol.upper(),
+        symbol=symbol_upper,
         side=request.side.upper(),
         quantity=request.quantity,
         order_type=request.order_type.upper(),
         price=request.price
     )
     result["mode"] = "simulation"
+    result["product_type"] = product_type
+    result["segment"] = segment
     return result
 
 @api_router.post("/orders/modify")
@@ -553,9 +569,113 @@ async def get_watchlist():
             "lot_size": config['lot_size'],
             "ltp": quote.get('ltp', 0),
             "change": quote.get('change', 0),
-            "change_percent": round(quote.get('change_percent', 0), 2)
+            "change_percent": round(quote.get('change_percent', 0), 2),
+            "segment": config.get('segment', 'nse_fo'),
+            "product_type": config.get('product_type', 'MIS')
         })
     return {"success": True, "watchlist": watchlist}
+
+@api_router.get("/watchlist/indices")
+async def get_indices_watchlist():
+    """Get index instruments (NIFTY, BANKNIFTY for F&O)"""
+    watchlist = []
+    for symbol, config in simulator.instruments.items():
+        if config.get('segment') == 'nse_fo':
+            quote = simulator.get_quote(symbol)
+            watchlist.append({
+                "symbol": symbol,
+                "lot_size": config['lot_size'],
+                "ltp": quote.get('ltp', 0),
+                "change": quote.get('change', 0),
+                "change_percent": round(quote.get('change_percent', 0), 2),
+                "segment": config.get('segment', 'nse_fo'),
+                "product_type": config.get('product_type', 'MIS')
+            })
+    return {"success": True, "watchlist": watchlist}
+
+@api_router.get("/watchlist/stocks")
+async def get_stocks_watchlist():
+    """Get stock instruments (Cash segment for CNC trading)"""
+    watchlist = []
+    for symbol, config in simulator.instruments.items():
+        if config.get('segment') == 'nse_cm':
+            quote = simulator.get_quote(symbol)
+            watchlist.append({
+                "symbol": symbol,
+                "lot_size": config['lot_size'],
+                "ltp": quote.get('ltp', 0),
+                "change": quote.get('change', 0),
+                "change_percent": round(quote.get('change_percent', 0), 2),
+                "segment": config.get('segment', 'nse_cm'),
+                "product_type": config.get('product_type', 'CNC')
+            })
+    return {"success": True, "watchlist": watchlist}
+
+@api_router.get("/stocks/search")
+async def search_stocks(query: str = "", limit: int = 20):
+    """Search for stocks by name or symbol"""
+    if not query:
+        # Return all available stocks
+        stocks = []
+        for symbol, config in simulator.instruments.items():
+            if config.get('segment') == 'nse_cm':
+                quote = simulator.get_quote(symbol)
+                stocks.append({
+                    "symbol": symbol,
+                    "name": symbol,
+                    "ltp": quote.get('ltp', 0),
+                    "change": quote.get('change', 0),
+                    "change_percent": round(quote.get('change_percent', 0), 2),
+                    "segment": config.get('segment'),
+                    "product_type": config.get('product_type', 'CNC')
+                })
+        return {"success": True, "results": stocks[:limit]}
+    
+    # Filter stocks by query
+    query_upper = query.upper()
+    results = []
+    for symbol, config in simulator.instruments.items():
+        if config.get('segment') == 'nse_cm' and query_upper in symbol:
+            quote = simulator.get_quote(symbol)
+            results.append({
+                "symbol": symbol,
+                "name": symbol,
+                "ltp": quote.get('ltp', 0),
+                "change": quote.get('change', 0),
+                "change_percent": round(quote.get('change_percent', 0), 2),
+                "segment": config.get('segment'),
+                "product_type": config.get('product_type', 'CNC')
+            })
+    
+    return {"success": True, "results": results[:limit], "query": query}
+
+@api_router.get("/instrument/{symbol}")
+async def get_instrument_details(symbol: str):
+    """Get detailed information about an instrument"""
+    symbol_upper = symbol.upper()
+    if symbol_upper not in simulator.instruments:
+        raise HTTPException(status_code=404, detail=f"Instrument {symbol} not found")
+    
+    config = simulator.instruments[symbol_upper]
+    quote = simulator.get_quote(symbol_upper)
+    
+    return {
+        "success": True,
+        "instrument": {
+            "symbol": symbol_upper,
+            "segment": config.get('segment', 'nse_fo'),
+            "product_type": config.get('product_type', 'MIS'),
+            "lot_size": config['lot_size'],
+            "token": config.get('token', symbol_upper),
+            "ltp": quote.get('ltp', 0),
+            "open": quote.get('open', 0),
+            "high": quote.get('high', 0),
+            "low": quote.get('low', 0),
+            "change": quote.get('change', 0),
+            "change_percent": round(quote.get('change_percent', 0), 2),
+            "volume": quote.get('volume', 0)
+        }
+    }
 
 # ==================== API LOGS ====================
 

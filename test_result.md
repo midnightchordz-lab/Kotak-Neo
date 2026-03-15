@@ -116,6 +116,57 @@ backend:
       - working: true
         agent: "main"
         comment: "GET /api/health returns healthy status with simulation and Kotak connection state"
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Health check returns status=healthy as expected. API responds correctly."
+
+  - task: "Watchlist APIs"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: All watchlist endpoints working perfectly. /api/watchlist returns 12 instruments (2 indices + 10 stocks). /api/watchlist/indices returns NIFTY and BANKNIFTY with segment=nse_fo. /api/watchlist/stocks returns 10 stocks with segment=nse_cm and product_type=CNC."
+
+  - task: "Stock Search API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Stock search working correctly. Returns all 10 stocks when no query. Filters correctly for HDFC query returning HDFCBANK."
+
+  - task: "Instrument Details API"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"  
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Instrument details API working correctly. RELIANCE returns segment=nse_cm for stocks. NIFTY returns segment=nse_fo for indices."
+
+  - task: "Simulation Control APIs"
+    implemented: true
+    working: true
+    file: "/app/backend/server.py"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: All simulation control endpoints working correctly. POST /api/simulation/start starts simulation. GET /api/simulation/status shows active=true. POST /api/simulation/stop stops simulation."
 
   - task: "Market Quote API"
     implemented: true
@@ -128,6 +179,9 @@ backend:
       - working: true
         agent: "main"
         comment: "GET /api/market/quote/{symbol} returns quote with LTP, OHLC, bid/ask for NIFTY and BANKNIFTY"
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Market quote API working correctly. Returns quote with ltp=2900.16, change=471.82 and all required fields for market data."
 
   - task: "Candle Data API"
     implemented: true
@@ -140,6 +194,9 @@ backend:
       - working: true
         agent: "main"
         comment: "GET /api/market/candles/{symbol} returns OHLCV candle data"
+      - working: true
+        agent: "testing"
+        comment: "✅ VERIFIED: Candle data API working correctly. Returns candles array with 100 candles containing proper OHLCV structure (open, high, low, close, volume fields)."
 
   - task: "Signal Generation API"
     implemented: true
@@ -370,3 +427,5 @@ agent_communication:
     message: "COSTAR Kotak Neo F&O Algo Trader MVP implemented. Backend has all core APIs working including signal generation with 10 indicators, backtesting, order management, and market simulation. Frontend has dark terminal UI with chart, gauge, quote panel, and tab navigation. Please test all high priority backend APIs."
   - agent: "testing"
     message: "✅ BACKEND TESTING COMPLETE: All 13 critical APIs tested and working perfectly. Signal generation returns 10 indicator votes with proper structure. Order placement, positions, and backtest APIs all functioning correctly. Backtesting shows 84.4% win rate with ₹36,289.25 P&L. AI validation integrated and working. Market quote API provides all essential trading data (LTP, OHLC, bid/ask). System ready for production use in simulation mode."
+  - agent: "testing"
+    message: "✅ COMPREHENSIVE API TESTING COMPLETE: All 17 backend endpoints tested successfully with 100% pass rate. Verified: Health Check (healthy status), Watchlist APIs (12 instruments: 2 indices + 10 stocks with correct segments), Stock Search (returns all/filtered results), Instrument Details (proper segment mapping), Signal Generation (10 indicators with structured votes), Market Data (quotes + candles), Order Placement (simulation mode), and Simulation Control (start/stop/status). All APIs return proper data structures matching specifications."

@@ -21,13 +21,14 @@ import { QuotePanel } from '../src/components/QuotePanel';
 import { RiskRewardPanel } from '../src/components/RiskRewardPanel';
 import { AIValidationPanel } from '../src/components/AIValidationPanel';
 import { LoginScreen } from '../src/components/LoginScreen';
+import { StocksTab } from '../src/components/StocksTab';
 import axios from 'axios';
 import Constants from 'expo-constants';
 
 const API_URL = Constants.expoConfig?.extra?.EXPO_PUBLIC_BACKEND_URL || process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-type TabType = 'signal' | 'positions' | 'orders' | 'backtest';
+type TabType = 'signal' | 'stocks' | 'positions' | 'orders' | 'backtest';
 type AppMode = 'login' | 'demo' | 'live';
 
 export default function TradingDashboard() {
@@ -165,7 +166,7 @@ export default function TradingDashboard() {
 
   const renderTabs = () => (
     <View style={styles.tabBar}>
-      {(['signal', 'positions', 'orders', 'backtest'] as TabType[]).map((tab) => (
+      {(['signal', 'stocks', 'positions', 'orders', 'backtest'] as TabType[]).map((tab) => (
         <TouchableOpacity
           key={tab}
           style={[styles.tab, activeTab === tab && styles.activeTab]}
@@ -177,6 +178,7 @@ export default function TradingDashboard() {
             }
             if (tab === 'orders') fetchOrders();
           }}
+          data-testid={`tab-${tab}`}
         >
           <Text style={[styles.tabText, activeTab === tab && styles.activeTabText]}>
             {tab.toUpperCase()}
@@ -521,6 +523,7 @@ export default function TradingDashboard() {
         )}
 
         {activeTab === 'signal' && renderSignalTab()}
+        {activeTab === 'stocks' && <StocksTab appMode={appMode} />}
         {activeTab === 'positions' && renderPositionsTab()}
         {activeTab === 'orders' && renderOrdersTab()}
         {activeTab === 'backtest' && renderBacktestTab()}
