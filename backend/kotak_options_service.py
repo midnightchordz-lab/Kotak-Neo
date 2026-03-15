@@ -226,6 +226,16 @@ class KotakOptionsService:
                         if ts > 10000000000:
                             ts = ts / 1000
                         expiry_dt = datetime.fromtimestamp(ts)
+                        
+                        # Kotak scripmaster has a 10-year offset issue
+                        # Dates come as 2016 instead of 2026
+                        current_year = datetime.now().year
+                        if expiry_dt.year < current_year - 1:
+                            year_diff = current_year - expiry_dt.year
+                            # Round to nearest 10 years
+                            year_offset = (year_diff // 10) * 10
+                            expiry_dt = expiry_dt.replace(year=expiry_dt.year + year_offset)
+                        
                         expiry_str = expiry_dt.strftime('%d-%b-%Y')
                         expiry_date = expiry_dt.strftime('%Y-%m-%d')
                     else:
