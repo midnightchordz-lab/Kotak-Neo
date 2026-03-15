@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,6 +14,9 @@ import { colors, spacing } from '../theme/colors';
 import axios from 'axios';
 
 const API_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+
+// Auto-refresh interval in milliseconds (5 seconds)
+const AUTO_REFRESH_INTERVAL = 5000;
 
 interface OptionContract {
   underlying: string;
@@ -38,10 +41,12 @@ interface OptionContract {
 interface OptionsChainData {
   underlying: string;
   spot_price: number;
+  price_source: string;
   expiry: string;
   atm_strike: number;
   pcr: number;
   max_pain: number;
+  is_live: boolean;
   calls: OptionContract[];
   puts: OptionContract[];
 }
@@ -75,6 +80,12 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
   const [orderQuantity, setOrderQuantity] = useState('1');
   const [orderSide, setOrderSide] = useState<'BUY' | 'SELL'>('BUY');
   const [viewMode, setViewMode] = useState<'chain' | 'signal'>('chain');
+  
+  // Auto-refresh state
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [lastRefreshTime, setLastRefreshTime] = useState<Date | null>(null);
+  const refreshIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchExpiries();
@@ -86,6 +97,54 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
       fetchOptionsSignal();
     }
   }, [selectedExpiry, underlying]);
+
+  // Auto-refresh effect
+  useEffect(() => {
+    if (autoRefresh && selectedExpiry && !loading) {
+      // Clear any existing interval
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+      
+      // Set up new interval
+      refreshIntervalRef.current = setInterval(() => {
+        silentRefresh();
+      }, AUTO_REFRESH_INTERVAL);
+      
+      return () => {
+        if (refreshIntervalRef.current) {
+          clearInterval(refreshIntervalRef.current);
+        }
+      };
+    }
+  }, [autoRefresh, selectedExpiry, underlying]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (refreshIntervalRef.current) {
+        clearInterval(refreshIntervalRef.current);
+      }
+    };
+  }, []);
+
+  const silentRefresh = useCallback(async () => {
+    if (isRefreshing || !selectedExpiry) return;
+    
+    setIsRefreshing(true);
+    try {
+      const response = await axios.get(
+        `${API_URL}/api/options/chain/${underlying}?expiry=${selectedExpiry}&strikes=10`
+      );
+      if (response.data.success) {
+        setChain(response.data);
+        setLastRefreshTime(new Date());
+      }
+    } catch (error) {
+      console.error('Silent refresh error:', error);
+    }
+    setIsRefreshing(false);
+  }, [underlying, selectedExpiry, isRefreshing]);
 
   const fetchExpiries = async () => {
     try {
@@ -109,6 +168,7 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
       );
       if (response.data.success) {
         setChain(response.data);
+        setLastRefreshTime(new Date());
       }
     } catch (error) {
       console.error('Error fetching options chain:', error);
@@ -312,6 +372,48 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
           </TouchableOpacity>
         ))}
       </View>
+
+      {/* Live Indicator Bar */}
+      <View style={styles.liveIndicatorBar}>
+        <View style={styles.liveStatusContainer}>
+          {chain && (
+            <>
+              <View style={[styles.liveIndicator, chain.is_live ? styles.liveIndicatorOn : styles.liveIndicatorOff]} />
+              <Text style={styles.liveStatusText}>
+                {chain.is_live ? 'LIVE' : 'SIMULATED'}
+              </Text>
+              <Text style={styles.spotPriceText}>
+                ₹{chain.spot_price.toFixed(2)}
+              </Text>
+              {chain.price_source && (
+                <Text style={styles.priceSourceText}>
+                  ({chain.price_source})
+                </Text>
+              )}
+            </>
+          )}
+          {isRefreshing && (
+            <ActivityIndicator size="small" color={colors.primary} style={styles.refreshingIndicator} />
+          )}
+        </View>
+        
+        <TouchableOpacity
+          style={[styles.autoRefreshBtn, autoRefresh && styles.autoRefreshBtnActive]}
+          onPress={() => setAutoRefresh(!autoRefresh)}
+          data-testid="auto-refresh-toggle"
+        >
+          <Text style={[styles.autoRefreshBtnText, autoRefresh && styles.autoRefreshBtnTextActive]}>
+            {autoRefresh ? '⟳ AUTO' : '⟳ OFF'}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Last Refresh Time */}
+      {lastRefreshTime && (
+        <Text style={styles.lastRefreshText}>
+          Last update: {lastRefreshTime.toLocaleTimeString()}
+        </Text>
+      )}
 
       {/* Expiry Selector */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.expiryScroll}>
@@ -521,6 +623,78 @@ const styles = StyleSheet.create({
   },
   underlyingBtnTextActive: {
     color: 'white',
+  },
+  liveIndicatorBar: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    backgroundColor: colors.bgCard,
+    padding: spacing.sm,
+    borderRadius: 6,
+    marginBottom: spacing.xs,
+  },
+  liveStatusContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  liveIndicator: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  liveIndicatorOn: {
+    backgroundColor: '#22c55e',
+    shadowColor: '#22c55e',
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.8,
+    shadowRadius: 4,
+  },
+  liveIndicatorOff: {
+    backgroundColor: '#f59e0b',
+  },
+  liveStatusText: {
+    color: colors.text,
+    fontSize: 10,
+    fontWeight: '700',
+    marginRight: 8,
+  },
+  spotPriceText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+  },
+  priceSourceText: {
+    color: colors.textMuted,
+    fontSize: 10,
+    marginLeft: 4,
+  },
+  refreshingIndicator: {
+    marginLeft: 8,
+  },
+  autoRefreshBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: colors.bgTertiary,
+    borderRadius: 4,
+  },
+  autoRefreshBtnActive: {
+    backgroundColor: colors.primary,
+  },
+  autoRefreshBtnText: {
+    color: colors.textMuted,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  autoRefreshBtnTextActive: {
+    color: 'white',
+  },
+  lastRefreshText: {
+    color: colors.textMuted,
+    fontSize: 9,
+    textAlign: 'right',
+    marginBottom: spacing.xs,
   },
   expiryScroll: {
     marginBottom: spacing.sm,

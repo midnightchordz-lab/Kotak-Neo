@@ -77,6 +77,20 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
   - GET /api/live-prices/{symbol} - Specific symbol price
 - [x] Options chain now uses live spot prices from poller
 
+#### Phase 5: Real Options Data (Completed - March 15, 2026)
+- [x] LiveOptionsService for real expiry dates and option prices
+- [x] Fetches/calculates real weekly expiry dates (Thursdays)
+- [x] Generates correct Kotak option symbols (e.g., NIFTY20MAR23500CE)
+- [x] Attempts live option quotes via Kotak Quotes API
+- [x] Updated API endpoints:
+  - GET /api/options/expiries/{underlying} - Returns real expiries with source indicator
+  - GET /api/options/chain/{underlying} - Full chain with is_live indicator
+- [x] Auto-refresh UI feature:
+  - Options chain refreshes every 5 seconds automatically
+  - Live indicator shows LIVE/SIMULATED status
+  - Toggle button to enable/disable auto-refresh
+  - Last refresh timestamp display
+
 ### ⚠️ Known Limitations
 
 #### HSM WebSocket Not Available from EC2
@@ -84,20 +98,21 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
 - Connection times out at TCP level (likely IP block on financial data streams)
 - **Workaround**: REST-based polling implemented as alternative (2-second interval)
 
-#### Options Chain Data is Simulated
-- Expiry dates are generated (not fetched from Kotak)
-- Option prices use Black-Scholes model (not live market prices)
-- OI and Greeks are simulated
-- **Note**: Live spot price IS used for ATM calculation
+#### Options Chain Data - Partial Live
+- Expiry dates now use calculated Thursdays (correct for NSE weekly expiry)
+- Spot price uses LIVE data from price poller
+- Option prices attempt live quotes but may fall back to Black-Scholes simulation
+- OI and Greeks are simulated when live data unavailable
+- **Note**: Response includes `is_live` field to indicate data source
 
 ### 🔮 Future Tasks
 
-#### P1: Real Options Data
-- [ ] Fetch real expiry dates from Kotak scrip master
-- [ ] Use scrip master for instrument tokens
-- [ ] Poll individual option contract prices via REST API
+#### P1: Full Live Option Prices
+- [ ] Subscribe to individual option contracts via Kotak Quotes API
+- [ ] Cache and refresh option prices periodically
+- [ ] Display real OI and volume data
 
-#### P2: Enhanced UI (Phase 5)
+#### P2: Enhanced UI (Phase 6)
 - [ ] Mobile-first UI optimization
 - [ ] Advanced charting features (drawing tools, indicators overlay)
 - [ ] Watchlist customization

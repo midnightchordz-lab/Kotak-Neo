@@ -33,6 +33,7 @@ from websocket_manager import ws_manager
 from kotak_hsm import KotakHSMWebSocket, get_hsm_client, set_hsm_client
 from kotak_scrip_master import scrip_master, KotakScripMaster
 from live_price_poller import live_price_poller, get_live_poller
+from live_options_service import live_options_service, get_live_options_service
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -160,12 +161,25 @@ async def login_mpin(request: LoginMPINRequest, background_tasks: BackgroundTask
     else:
         result['live_poller'] = "Already running"
     
+    # Initialize live options service
+    live_options_service.set_kotak_api(kotak_api)
+    background_tasks.add_task(init_live_options)
+    result['live_options'] = "Initializing..."
+    
     return result
 
 async def start_live_poller():
     """Start the live price poller"""
     await live_price_poller.start()
     logger.info("Live price poller started after authentication")
+
+async def init_live_options():
+    """Initialize the live options service"""
+    success = await live_options_service.fetch_instruments()
+    if success:
+        logger.info(f"Live options initialized. NIFTY expiries: {live_options_service.nifty_expiries}")
+    else:
+        logger.warning("Live options initialization failed, will use calculated expiries")
 
 @api_router.get("/auth/status")
 async def auth_status():
@@ -1179,22 +1193,39 @@ async def calculate_position_size(symbol: str, risk_percent: float = 1.0, capita
 
 @api_router.get("/options/expiries/{underlying}")
 async def get_options_expiries(underlying: str):
-    """Get available expiry dates for options"""
+    """Get available expiry dates for options - uses real dates when available"""
     underlying_upper = underlying.upper()
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    expiries = options_chain_generator.generate_expiries()
+    # Try to get real expiries from live options service
+    opts_service = get_live_options_service()
+    expiries = opts_service.get_expiries(underlying_upper)
+    
+    if not expiries:
+        # Initialize if needed
+        await opts_service.fetch_instruments()
+        expiries = opts_service.get_expiries(underlying_upper)
+    
+    if not expiries:
+        # Fall back to calculated expiries
+        expiries = opts_service._generate_weekly_expiries(datetime.now().date(), 4)
+        source = "calculated"
+    else:
+        source = "live" if opts_service.last_updated else "cached"
+    
     return {
         "success": True,
         "underlying": underlying_upper,
-        "expiries": expiries
+        "expiries": expiries,
+        "source": source,
+        "last_updated": opts_service.last_updated.isoformat() if opts_service.last_updated else None
     }
 
 @api_router.get("/options/chain/{underlying}")
 async def get_options_chain(underlying: str, expiry: Optional[str] = None, strikes: int = 15):
     """
-    Get complete options chain for an underlying
+    Get complete options chain for an underlying with live data
     
     Args:
         underlying: NIFTY or BANKNIFTY
@@ -1237,11 +1268,15 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
     if not spot_price:
         raise HTTPException(status_code=400, detail=f"No price data for {underlying_upper}")
     
-    # Generate options chain with the spot price
-    chain = options_chain_generator.generate_chain(
+    # Use live options service to build the chain
+    opts_service = get_live_options_service()
+    opts_service.set_kotak_api(kotak_api)
+    
+    # Build options chain with live data
+    chain = await opts_service.build_options_chain(
         underlying=underlying_upper,
         spot_price=spot_price,
-        expiry_date=expiry,
+        expiry=expiry,
         num_strikes=strikes
     )
     
@@ -1256,6 +1291,7 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
         "pcr": chain.pcr,
         "max_pain": chain.max_pain,
         "timestamp": chain.timestamp,
+        "is_live": chain.is_live,
         "calls": [asdict(c) for c in chain.calls],
         "puts": [asdict(p) for p in chain.puts]
     }
