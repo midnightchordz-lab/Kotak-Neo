@@ -251,6 +251,10 @@ class KotakNeoAPI:
                 
                 logger.info('Step 2 MPIN validation successful')
                 logger.info(f'Base URL for trading: {self.session.base_url}')
+                logger.info(f'HSM Server ID: {self.session.server_id}')
+                logger.info(f'Data Center: {self.session.data_center}')
+                logger.info(f'Edit SID: {self.session.edit_sid[:20] if self.session.edit_sid else "N/A"}...')
+                logger.info(f'Edit Token: {self.session.edit_token[:20] if self.session.edit_token else "N/A"}...')
                 
                 return {
                     'success': True,

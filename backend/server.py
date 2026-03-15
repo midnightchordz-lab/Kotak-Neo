@@ -162,7 +162,15 @@ async def auth_status():
             "authenticated": True,
             "mode": "live",
             "user_id": kotak_api.session.user_id,
-            "hsm_connected": hsm.is_connected if hsm else False
+            "hsm_connected": hsm.is_connected if hsm else False,
+            "session_info": {
+                "has_edit_token": bool(kotak_api.session.edit_token),
+                "has_edit_sid": bool(kotak_api.session.edit_sid),
+                "has_server_id": bool(kotak_api.session.server_id),
+                "server_id": kotak_api.session.server_id or "NOT_RECEIVED",
+                "data_center": kotak_api.session.data_center or "NOT_RECEIVED",
+                "base_url": kotak_api.session.base_url or "NOT_RECEIVED"
+            }
         }
     return {
         "authenticated": False,
@@ -186,8 +194,15 @@ async def connect_hsm(background_tasks: BackgroundTasks):
     sid = kotak_api.session.edit_sid
     server_id = kotak_api.session.server_id
     
+    logger.info(f"HSM Connection attempt - access_token: {access_token[:20] if access_token else 'MISSING'}...")
+    logger.info(f"HSM Connection attempt - sid: {sid[:20] if sid else 'MISSING'}...")
+    logger.info(f"HSM Connection attempt - server_id: {server_id if server_id else 'MISSING'}")
+    
     if not access_token or not sid:
         raise HTTPException(status_code=400, detail="Session credentials not available")
+    
+    if not server_id:
+        logger.warning("Server ID (hsServerId) is empty! This may cause HSM connection to fail.")
     
     # Create HSM client
     hsm = KotakHSMWebSocket(access_token, sid, server_id)

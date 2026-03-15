@@ -73,10 +73,20 @@ class KotakHSMWebSocket:
     async def connect(self) -> bool:
         """Connect to Kotak HSM WebSocket"""
         try:
-            # Build WebSocket URL with access token
+            # Build WebSocket URL with ALL required parameters
+            # According to Kotak documentation, we need: access_token, sid, AND server_id
             ws_url = f"{self.WS_BASE}?EIO=3&transport=websocket&access_token={self.access_token}"
             
-            logger.info(f"Connecting to HSM: {ws_url[:80]}...")
+            # Add SID if available
+            if self.sid:
+                ws_url += f"&sid={self.sid}"
+            
+            # Add Server ID if available (critical for HSM connection)
+            if self.server_id:
+                ws_url += f"&server_id={self.server_id}"
+            
+            logger.info(f"Connecting to HSM WebSocket...")
+            logger.info(f"URL params - access_token: {self.access_token[:20]}..., sid: {self.sid[:20] if self.sid else 'N/A'}..., server_id: {self.server_id or 'N/A'}")
             
             # Connect with longer timeout
             self.ws = await asyncio.wait_for(

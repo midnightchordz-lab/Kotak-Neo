@@ -161,11 +161,11 @@ KOTAK_MOBILE="+91xxx"
 KOTAK_UCC="XCB4O"
 
 # Frontend (.env)
-EXPO_PUBLIC_BACKEND_URL="https://neo-trader-sandbox.preview.emergentagent.com"
+EXPO_PUBLIC_BACKEND_URL="https://options-chain.preview.emergentagent.com"
 ```
 
 ## Deployment
-- **Preview Environment**: https://neo-trader-sandbox.preview.emergentagent.com
+- **Preview Environment**: https://options-chain.preview.emergentagent.com
 - **Production (AWS EC2)**: http://ec2-51-20-66-73.eu-north-1.compute.amazonaws.com
 
 ## Testing Status

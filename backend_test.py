@@ -517,7 +517,7 @@ class OptionsAPITester:
 def main():
     """Main testing function"""
     # Use the specific URL from the review request
-    base_url = "https://neo-trader-sandbox.preview.emergentagent.com"
+    base_url = "https://options-chain.preview.emergentagent.com"
     
     tester = OptionsAPITester(base_url)
     results = tester.run_all_tests()
