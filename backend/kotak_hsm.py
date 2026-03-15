@@ -194,21 +194,18 @@ class KotakHSMWebSocket:
             True if connected successfully
         """
         try:
-            # Build WebSocket URL with authentication
-            ws_url = f"{self.WS_URL}?access_token={self.access_token}&EIO=3&transport=websocket"
+            # Use Socket.IO connection with proper URL format
+            # URL: https://wstreamer.kotaksecurities.com?access_token=TOKEN
+            # Path: /feed/
+            ws_url = f"https://wstreamer.kotaksecurities.com?access_token={self.access_token}"
             
-            logger.info(f"Connecting to HSM WebSocket...")
-            
-            # Add auth headers
-            headers = {
-                'Authorization': self.access_token,
-                'sid': self.sid
-            }
+            logger.info(f"Connecting to HSM WebSocket at: {ws_url[:50]}...")
+            logger.info(f"Using SID: {self.sid}, Server ID: {self.server_id}")
             
             await self.sio.connect(
                 ws_url,
-                headers=headers,
-                transports=['websocket']
+                socketio_path='/feed/',
+                transports=['websocket', 'polling']
             )
             
             self.is_connected = True
