@@ -189,23 +189,29 @@ async def connect_hsm(background_tasks: BackgroundTasks):
     if not kotak_api or not kotak_api.session.is_authenticated:
         raise HTTPException(status_code=401, detail="Authentication required. Complete TOTP and MPIN first.")
     
-    # Get session credentials for HSM
-    access_token = kotak_api.session.edit_token
+    # Get credentials for HSM
+    # The WebSocket requires the CONSUMER KEY (access token from Kotak dashboard)
+    # NOT the edit_token from MPIN validation
+    consumer_key = kotak_api.consumer_key  # This is the API access token
+    edit_token = kotak_api.session.edit_token  # Session token from MPIN
     sid = kotak_api.session.edit_sid
     server_id = kotak_api.session.server_id
     
-    logger.info(f"HSM Connection attempt - access_token: {access_token[:20] if access_token else 'MISSING'}...")
-    logger.info(f"HSM Connection attempt - sid: {sid[:20] if sid else 'MISSING'}...")
-    logger.info(f"HSM Connection attempt - server_id: {server_id if server_id else 'MISSING'}")
+    logger.info(f"HSM Connection - Consumer Key: {consumer_key[:20] if consumer_key else 'MISSING'}...")
+    logger.info(f"HSM Connection - Edit Token: {edit_token[:20] if edit_token else 'MISSING'}...")
+    logger.info(f"HSM Connection - SID: {sid[:20] if sid else 'MISSING'}...")
+    logger.info(f"HSM Connection - Server ID: {server_id if server_id else 'MISSING'}")
     
-    if not access_token or not sid:
-        raise HTTPException(status_code=400, detail="Session credentials not available")
+    if not consumer_key:
+        raise HTTPException(status_code=400, detail="Consumer key (access token) not available")
     
-    if not server_id:
-        logger.warning("Server ID (hsServerId) is empty! This may cause HSM connection to fail.")
-    
-    # Create HSM client
-    hsm = KotakHSMWebSocket(access_token, sid, server_id)
+    # Create HSM client with CONSUMER KEY as access token
+    # According to howutrade.github.io/kotak-websocket/ documentation
+    hsm = KotakHSMWebSocket(
+        access_token=consumer_key,  # Use consumer key, not edit_token
+        sid=sid,
+        server_id=server_id
+    )
     
     # Set up callbacks to broadcast via our WebSocket
     def on_tick(tick):
