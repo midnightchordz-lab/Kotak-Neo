@@ -243,7 +243,8 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
     return colors.text;
   };
 
-  const formatNumber = (num: number) => {
+  const formatNumber = (num: number | undefined | null) => {
+    if (num === undefined || num === null || isNaN(num)) return '0';
     if (num >= 100000) return `${(num / 100000).toFixed(1)}L`;
     if (num >= 1000) return `${(num / 1000).toFixed(1)}K`;
     return num.toString();
@@ -269,11 +270,11 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
           data-testid={`call-${call.strike}`}
         >
           <Text style={styles.oiText}>{formatNumber(call.open_interest)}</Text>
-          <Text style={[styles.oiChange, { color: getChangeColor(call.oi_change) }]}>
-            {call.oi_change > 0 ? '+' : ''}{formatNumber(call.oi_change)}
+          <Text style={[styles.oiChange, { color: getChangeColor(call.oi_change || 0) }]}>
+            {(call.oi_change || 0) > 0 ? '+' : ''}{formatNumber(call.oi_change)}
           </Text>
-          <Text style={styles.ivText}>{call.iv.toFixed(1)}%</Text>
-          <Text style={styles.ltpText}>₹{call.ltp.toFixed(2)}</Text>
+          <Text style={styles.ivText}>{(call.iv || 0).toFixed(1)}%</Text>
+          <Text style={styles.ltpText}>₹{(call.ltp || 0).toFixed(2)}</Text>
         </TouchableOpacity>
 
         {/* Strike */}
@@ -293,10 +294,10 @@ export const OptionsTab: React.FC<OptionsTabProps> = ({ appMode }) => {
           }}
           data-testid={`put-${put.strike}`}
         >
-          <Text style={styles.ltpText}>₹{put.ltp.toFixed(2)}</Text>
-          <Text style={styles.ivText}>{put.iv.toFixed(1)}%</Text>
-          <Text style={[styles.oiChange, { color: getChangeColor(put.oi_change) }]}>
-            {put.oi_change > 0 ? '+' : ''}{formatNumber(put.oi_change)}
+          <Text style={styles.ltpText}>₹{(put.ltp || 0).toFixed(2)}</Text>
+          <Text style={styles.ivText}>{(put.iv || 0).toFixed(1)}%</Text>
+          <Text style={[styles.oiChange, { color: getChangeColor(put.oi_change || 0) }]}>
+            {(put.oi_change || 0) > 0 ? '+' : ''}{formatNumber(put.oi_change)}
           </Text>
           <Text style={styles.oiText}>{formatNumber(put.open_interest)}</Text>
         </TouchableOpacity>

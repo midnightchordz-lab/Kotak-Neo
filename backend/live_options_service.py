@@ -32,7 +32,7 @@ class OptionContract:
     ltp: float = 0.0
     bid: float = 0.0
     ask: float = 0.0
-    oi: int = 0
+    open_interest: int = 0
     oi_change: int = 0
     volume: int = 0
     iv: float = 0.0
@@ -475,7 +475,7 @@ class LiveOptionsService:
                 ltp=ce_ltp,
                 bid=ce_data.get('bid', 0),
                 ask=ce_data.get('ask', 0),
-                oi=ce_oi,
+                open_interest=ce_oi,
                 oi_change=0,
                 volume=ce_data.get('volume', 0),
                 iv=ce_iv,
@@ -498,7 +498,7 @@ class LiveOptionsService:
                 ltp=pe_ltp,
                 bid=pe_data.get('bid', 0),
                 ask=pe_data.get('ask', 0),
-                oi=pe_oi,
+                open_interest=pe_oi,
                 oi_change=0,
                 volume=pe_data.get('volume', 0),
                 iv=pe_iv,
