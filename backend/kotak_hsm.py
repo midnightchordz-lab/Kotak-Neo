@@ -4,11 +4,17 @@ Real-time market data streaming for live quotes, indices, and market depth
 
 Uses raw websockets for Kotak's market feed based on:
 wss://wstreamer.kotaksecurities.com/feed/?EIO=3&transport=websocket&access_token=TOKEN
+
+Connection methods:
+1. Use session edit_token directly (from MPIN validation)
+2. Get separate WebSocket token from /feed/auth/token (using consumer key/secret)
 """
 import asyncio
 import json
 import logging
 import websockets
+import httpx
+import base64
 from typing import Dict, List, Optional, Callable, Any
 from dataclasses import dataclass, asdict
 from datetime import datetime
@@ -49,12 +55,25 @@ class KotakHSMWebSocket:
     
     # WebSocket URL
     WS_BASE = "wss://wstreamer.kotaksecurities.com/feed/"
+    WS_AUTH_URL = "https://wstreamer.kotaksecurities.com/feed/auth/token"
     
-    def __init__(self, access_token: str, sid: str = "", server_id: str = ""):
-        """Initialize HSM WebSocket"""
+    def __init__(self, access_token: str, sid: str = "", server_id: str = "", 
+                 consumer_key: str = "", consumer_secret: str = ""):
+        """
+        Initialize HSM WebSocket
+        
+        Args:
+            access_token: Session token from MPIN validation (edit_token)
+            sid: Session ID
+            server_id: HSM Server ID
+            consumer_key: API consumer key (optional, for alternative auth)
+            consumer_secret: API consumer secret (optional, for alternative auth)
+        """
         self.access_token = access_token
         self.sid = sid
         self.server_id = server_id
+        self.consumer_key = consumer_key
+        self.consumer_secret = consumer_secret
         
         self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
@@ -70,64 +89,131 @@ class KotakHSMWebSocket:
         self.on_tick: Optional[Callable[[MarketTick], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
     
-    async def connect(self) -> bool:
-        """Connect to Kotak HSM WebSocket"""
+    async def get_ws_token(self) -> Optional[str]:
+        """
+        Get WebSocket-specific token from the auth endpoint
+        
+        Uses consumer_key and consumer_secret to authenticate
+        POST to https://wstreamer.kotaksecurities.com/feed/auth/token
+        """
+        if not self.consumer_key or not self.consumer_secret:
+            logger.warning("Consumer key/secret not provided for WS auth")
+            return None
+        
         try:
-            # Build WebSocket URL with ALL required parameters
-            # According to Kotak documentation, we need: access_token, sid, AND server_id
-            ws_url = f"{self.WS_BASE}?EIO=3&transport=websocket&access_token={self.access_token}"
+            auth_str = f"{self.consumer_key}:{self.consumer_secret}"
+            auth_base64 = base64.b64encode(auth_str.encode()).decode()
             
-            # Add SID if available
-            if self.sid:
-                ws_url += f"&sid={self.sid}"
+            payload = {"authentication": auth_base64}
             
-            # Add Server ID if available (critical for HSM connection)
-            if self.server_id:
-                ws_url += f"&server_id={self.server_id}"
-            
-            logger.info(f"Connecting to HSM WebSocket...")
-            logger.info(f"URL params - access_token: {self.access_token[:20]}..., sid: {self.sid[:20] if self.sid else 'N/A'}..., server_id: {self.server_id or 'N/A'}")
-            
-            # Connect with longer timeout
-            self.ws = await asyncio.wait_for(
-                websockets.connect(
-                    ws_url,
-                    ping_interval=None,  # We'll handle pings manually
-                    ping_timeout=None,
-                    close_timeout=10
-                ),
-                timeout=30
-            )
-            
-            logger.info("WebSocket connected, waiting for welcome...")
-            
-            # Wait for welcome message
-            welcome = await asyncio.wait_for(self.ws.recv(), timeout=10)
-            logger.info(f"Received: {welcome[:100] if len(welcome) > 100 else welcome}")
-            
-            # Check for broadcast (error) message
-            if "broadcast" in str(welcome).lower():
-                logger.error("Received broadcast message - authentication failed")
-                await self.ws.close()
-                return False
-            
-            self.is_connected = True
-            
-            # Start ping task (every 10 seconds)
-            self._ping_task = asyncio.create_task(self._ping_loop())
-            
-            # Start receive task
-            self._receive_task = asyncio.create_task(self._receive_loop())
-            
-            logger.info("HSM WebSocket connected successfully!")
-            return True
-            
-        except asyncio.TimeoutError:
-            logger.error("HSM connection timeout")
-            return False
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    self.WS_AUTH_URL,
+                    json=payload,
+                    headers={"Content-Type": "application/json"}
+                )
+                
+                logger.info(f"WS Auth Response Status: {response.status_code}")
+                logger.info(f"WS Auth Response: {response.text[:200]}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    ws_token = data.get('token', data.get('access_token', ''))
+                    if ws_token:
+                        logger.info("Got WebSocket-specific token!")
+                        return ws_token
+                        
         except Exception as e:
-            logger.error(f"HSM connection error: {e}")
-            return False
+            logger.error(f"Error getting WS token: {e}")
+        
+        return None
+    
+    async def connect(self, max_retries: int = 3) -> bool:
+        """
+        Connect to Kotak HSM WebSocket
+        
+        Note: If welcome message is received as "broadcast" event (not "message"),
+        we need to disconnect and reconnect (per Kotak documentation)
+        """
+        for attempt in range(max_retries):
+            try:
+                # Build WebSocket URL with access token only
+                # According to howutrade.github.io/kotak-websocket/
+                # The URL only needs access_token (the session token)
+                ws_url = f"{self.WS_BASE}?EIO=3&transport=websocket&access_token={self.access_token}"
+                
+                logger.info(f"Connecting to HSM WebSocket (attempt {attempt + 1}/{max_retries})...")
+                logger.info(f"URL: {ws_url[:80]}...")
+                
+                # Connect with longer timeout
+                self.ws = await asyncio.wait_for(
+                    websockets.connect(
+                        ws_url,
+                        ping_interval=None,  # We'll handle pings manually
+                        ping_timeout=None,
+                        close_timeout=10
+                    ),
+                    timeout=30
+                )
+                
+                logger.info("WebSocket connected, waiting for welcome...")
+                
+                # Wait for initial messages
+                # We expect: "0{sid...}" then "40" then "42[...]"
+                welcome_received = False
+                message_type_welcome = False
+                
+                for i in range(5):  # Read up to 5 messages to find welcome
+                    try:
+                        msg = await asyncio.wait_for(self.ws.recv(), timeout=5)
+                        logger.info(f"HSM Message {i+1}: {msg[:150] if len(msg) > 150 else msg}")
+                        
+                        # Check for "message" event (good - we can proceed)
+                        if '42["message"' in msg.lower():
+                            logger.info("Received 'message' type welcome - connection good!")
+                            welcome_received = True
+                            message_type_welcome = True
+                            break
+                        
+                        # Check for "broadcast" event (need to retry per documentation)
+                        if '42["broadcast"' in msg.lower():
+                            logger.warning("Received 'broadcast' type welcome - will retry connection")
+                            welcome_received = True
+                            message_type_welcome = False
+                            break
+                            
+                    except asyncio.TimeoutError:
+                        logger.warning(f"Timeout waiting for message {i+1}")
+                        break
+                
+                # If we got broadcast, close and retry
+                if welcome_received and not message_type_welcome:
+                    await self.ws.close()
+                    await asyncio.sleep(1)
+                    continue
+                
+                # If we got here, we either have a good connection or no welcome at all
+                # Try proceeding anyway (some versions don't send message welcome)
+                self.is_connected = True
+                
+                # Start ping task (every 10 seconds)
+                self._ping_task = asyncio.create_task(self._ping_loop())
+                
+                # Start receive task
+                self._receive_task = asyncio.create_task(self._receive_loop())
+                
+                logger.info("HSM WebSocket connected successfully!")
+                return True
+                
+            except asyncio.TimeoutError:
+                logger.error(f"HSM connection timeout (attempt {attempt + 1})")
+            except Exception as e:
+                logger.error(f"HSM connection error (attempt {attempt + 1}): {e}")
+            
+            await asyncio.sleep(1)  # Wait before retry
+        
+        logger.error(f"HSM connection failed after {max_retries} attempts")
+        return False
     
     async def disconnect(self):
         """Disconnect from WebSocket"""

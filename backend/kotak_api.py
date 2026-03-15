@@ -240,18 +240,49 @@ class KotakNeoAPI:
             if 200 <= response.status_code <= 299 and data.get('data'):
                 response_data = data.get('data', {})
                 
+                # Log full response for debugging hsServerId issue
+                logger.info(f'MPIN Full Response Keys: {list(response_data.keys())}')
+                logger.info(f'MPIN Full Response Data: {response_data}')
+                
                 # Store session data as per official SDK
                 self.session.edit_token = response_data.get('token', '')
                 self.session.edit_sid = response_data.get('sid', '')
                 self.session.rid = response_data.get('rid', '')
-                self.session.server_id = response_data.get('hsServerId', '')
-                self.session.data_center = response_data.get('dataCenter', '')
-                self.session.base_url = response_data.get('baseUrl', '')
+                
+                # Try multiple possible field names for server ID
+                self.session.server_id = (
+                    response_data.get('hsServerId', '') or 
+                    response_data.get('hs_server_id', '') or
+                    response_data.get('serverId', '') or
+                    response_data.get('server_id', '') or
+                    response_data.get('hsId', '') or
+                    response_data.get('hsmServerId', '') or
+                    ''
+                )
+                
+                self.session.data_center = response_data.get('dataCenter', '') or response_data.get('data_center', '')
+                self.session.base_url = response_data.get('baseUrl', '') or response_data.get('base_url', '')
+                
+                # If server_id is still empty, try to extract from base_url or use data_center
+                # e.g., base_url "https://e41.kotaksecurities.com" -> server_id might be "e41" or "E41"
+                if not self.session.server_id and self.session.base_url:
+                    import re
+                    match = re.search(r'https://([a-zA-Z0-9]+)\.kotaksecurities\.com', self.session.base_url)
+                    if match:
+                        extracted_server_id = match.group(1)
+                        logger.info(f'Extracted potential server_id from baseUrl: {extracted_server_id}')
+                        self.session.server_id = extracted_server_id
+                
+                # Final fallback - use data_center as server_id
+                if not self.session.server_id and self.session.data_center:
+                    logger.info(f'Using data_center as server_id: {self.session.data_center}')
+                    self.session.server_id = self.session.data_center
+                
                 self.session.is_authenticated = True
                 
                 logger.info('Step 2 MPIN validation successful')
                 logger.info(f'Base URL for trading: {self.session.base_url}')
-                logger.info(f'HSM Server ID: {self.session.server_id}')
+                logger.info(f'HSM Server ID: {self.session.server_id if self.session.server_id else "NOT FOUND IN RESPONSE"}')
                 logger.info(f'Data Center: {self.session.data_center}')
                 logger.info(f'Edit SID: {self.session.edit_sid[:20] if self.session.edit_sid else "N/A"}...')
                 logger.info(f'Edit Token: {self.session.edit_token[:20] if self.session.edit_token else "N/A"}...')
