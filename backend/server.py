@@ -30,6 +30,7 @@ from ai_validator import AIValidator
 from backtester import Backtester
 from options_chain import options_chain_generator, OptionsChain
 from websocket_manager import ws_manager
+from kotak_hsm import KotakHSMWebSocket, get_hsm_client, set_hsm_client
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -155,16 +156,123 @@ async def login_mpin(request: LoginMPINRequest):
 async def auth_status():
     """Check authentication status"""
     if kotak_api and kotak_api.session.is_authenticated:
+        hsm = get_hsm_client()
         return {
             "authenticated": True,
             "mode": "live",
-            "user_id": kotak_api.session.user_id
+            "user_id": kotak_api.session.user_id,
+            "hsm_connected": hsm.is_connected if hsm else False
         }
     return {
         "authenticated": False,
         "mode": "demo",
         "message": "Using simulation mode"
     }
+
+# ==================== HSM WEBSOCKET ====================
+
+@api_router.post("/hsm/connect")
+async def connect_hsm(background_tasks: BackgroundTasks):
+    """
+    Connect to Kotak HSM WebSocket for real-time market data streaming.
+    Requires authentication (TOTP + MPIN) to be completed first.
+    """
+    if not kotak_api or not kotak_api.session.is_authenticated:
+        raise HTTPException(status_code=401, detail="Authentication required. Complete TOTP and MPIN first.")
+    
+    # Get session credentials for HSM
+    access_token = kotak_api.session.edit_token
+    sid = kotak_api.session.edit_sid
+    server_id = kotak_api.session.server_id
+    
+    if not access_token or not sid:
+        raise HTTPException(status_code=400, detail="Session credentials not available")
+    
+    # Create HSM client
+    hsm = KotakHSMWebSocket(access_token, sid, server_id)
+    
+    # Set up callbacks to broadcast via our WebSocket
+    def on_tick(tick):
+        logger.info(f"HSM Tick: {tick.symbol} LTP={tick.ltp}")
+        # Update simulator with live price
+        if tick.symbol in ['Nifty 50', 'NIFTY']:
+            simulator.instruments['NIFTY']['base_price'] = tick.ltp
+        elif tick.symbol in ['Nifty Bank', 'BANKNIFTY']:
+            simulator.instruments['BANKNIFTY']['base_price'] = tick.ltp
+    
+    hsm.on_tick = on_tick
+    
+    # Connect in background
+    try:
+        connected = await hsm.connect()
+        if connected:
+            set_hsm_client(hsm)
+            
+            # Auto-subscribe to NIFTY and BANKNIFTY
+            await hsm.subscribe_index("nse_cm|Nifty 50&nse_cm|Nifty Bank&")
+            
+            return {
+                "success": True,
+                "message": "Connected to HSM WebSocket",
+                "subscribed": ["Nifty 50", "Nifty Bank"]
+            }
+        else:
+            return {"success": False, "error": "Failed to connect to HSM"}
+    except Exception as e:
+        logger.error(f"HSM connection error: {e}")
+        return {"success": False, "error": str(e)}
+
+@api_router.post("/hsm/disconnect")
+async def disconnect_hsm():
+    """Disconnect from HSM WebSocket"""
+    hsm = get_hsm_client()
+    if hsm and hsm.is_connected:
+        await hsm.disconnect()
+        return {"success": True, "message": "Disconnected from HSM"}
+    return {"success": False, "message": "HSM not connected"}
+
+@api_router.post("/hsm/subscribe")
+async def subscribe_hsm(scrips: str = "", indices: str = "", depth: bool = False):
+    """
+    Subscribe to market data feeds.
+    
+    Args:
+        scrips: Scrip subscription string, e.g. "nse_cm|11536&nse_fo|43651&"
+        indices: Index subscription string, e.g. "nse_cm|Nifty 50&nse_cm|Nifty Bank&"
+        depth: Whether to subscribe to market depth
+    """
+    hsm = get_hsm_client()
+    if not hsm or not hsm.is_connected:
+        raise HTTPException(status_code=400, detail="HSM not connected. Call /api/hsm/connect first.")
+    
+    results = []
+    
+    if indices:
+        await hsm.subscribe_index(indices)
+        results.append(f"Subscribed to indices: {indices}")
+    
+    if scrips:
+        await hsm.subscribe_scrip(scrips)
+        results.append(f"Subscribed to scrips: {scrips}")
+    
+    if depth and scrips:
+        await hsm.subscribe_depth(scrips)
+        results.append(f"Subscribed to depth: {scrips}")
+    
+    return {"success": True, "results": results}
+
+@api_router.get("/hsm/status")
+async def hsm_status():
+    """Get HSM WebSocket connection status"""
+    hsm = get_hsm_client()
+    if hsm:
+        return {
+            "connected": hsm.is_connected,
+            "subscribed_indices": hsm.subscribed_indices,
+            "subscribed_scrips": hsm.subscribed_scrips,
+            "latest_ticks": {k: {"ltp": v.ltp, "change": v.change} for k, v in hsm.get_all_ticks().items()}
+        }
+    return {"connected": False, "message": "HSM client not initialized"}
 
 # ==================== SIMULATION CONTROL ====================
 
