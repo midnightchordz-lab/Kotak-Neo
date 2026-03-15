@@ -586,8 +586,8 @@ class KotakNeoAPI:
         """
         Get real-time quotes for instruments using Kotak Neo API v2.
         
-        Based on official SDK QuotesAPI:
-        POST {baseUrl}/quick/user/quotes OR using session credentials
+        Based on official SDK and Migration Guide:
+        POST {baseUrl}/script-details/1.0/quotes/
         
         Args:
             instrument_tokens: List of dicts with instrument_token and exchange_segment
@@ -595,21 +595,18 @@ class KotakNeoAPI:
             quote_type: ltp, market_depth, ohlc, 52w, circuit_limits, scrip_details, all
             is_index: Set to True for index instruments (NIFTY, BANKNIFTY)
         """
-        # Try using authenticated endpoint first if authenticated
+        # Use the correct quotes endpoint: {baseUrl}/script-details/1.0/quotes/
         if self.session.is_authenticated and self.session.base_url:
-            url = f'{self.session.base_url}/quick/user/quotes'
+            url = f'{self.session.base_url}/script-details/1.0/quotes/'
             headers = self._get_auth_headers()
         else:
-            # Fallback to public quotes endpoint with session credentials
-            url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes'
+            # Fallback to login base URL
+            url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes/'
             headers = self._get_quote_headers()
-            # Add session credentials if available
             if self.session.view_token:
                 headers['session_token'] = self.session.view_token
             if self.session.sid:
                 headers['sid'] = self.session.sid
-            if self.session.server_id:
-                headers['server_id'] = self.session.server_id
         
         body = {
             'instrument_tokens': instrument_tokens,
