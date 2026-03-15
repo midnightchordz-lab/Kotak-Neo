@@ -98,11 +98,13 @@ Build a full-stack algo-trading application for the Kotak NEO platform that prov
 - Connection times out at TCP level (likely IP block on financial data streams)
 - **Workaround**: REST-based polling implemented as alternative (2-second interval)
 
-#### Options Chain Data - Partial Live
-- Expiry dates now use calculated Thursdays (correct for NSE weekly expiry)
+#### Options Chain Data - Live Prices Fix (March 15, 2026)
+- **FIXED**: Updated `kotak_options_service.py` to use correct symbol format for Kotak Quotes API
+- Previously: Used numeric instrument token (pSymbol) which caused `400 Invalid neosymbol values` error
+- Now: Uses trading_symbol (e.g., `NIFTY25MAR23000CE`) which is the correct format for the Quotes API
+- Expiry dates use corrected year (10-year offset fix applied)
 - Spot price uses LIVE data from price poller
-- Option prices attempt live quotes but may fall back to Black-Scholes simulation
-- OI and Greeks are simulated when live data unavailable
+- Option prices attempt live quotes and fall back to Black-Scholes simulation if unavailable
 - **Note**: Response includes `is_live` field to indicate data source
 
 ### 🔮 Future Tasks
@@ -204,11 +206,11 @@ KOTAK_MOBILE="+91xxx"
 KOTAK_UCC="XCB4O"
 
 # Frontend (.env)
-EXPO_PUBLIC_BACKEND_URL="https://options-chain.preview.emergentagent.com"
+EXPO_PUBLIC_BACKEND_URL="https://algo-options-3.preview.emergentagent.com"
 ```
 
 ## Deployment
-- **Preview Environment**: https://options-chain.preview.emergentagent.com
+- **Preview Environment**: https://algo-options-3.preview.emergentagent.com
 - **Production (AWS EC2)**: http://51.20.66.73 (user's EC2 instance)
   - Backend: pm2 managed, port 8001
   - Frontend: Nginx serving static build

@@ -400,10 +400,12 @@ class KotakOptionsService:
         Get quotes for multiple instruments
         
         Args:
-            instruments: List of (exchange_segment, symbol) tuples
+            instruments: List of (exchange_segment, trading_symbol) tuples
+            
+        Note: The API expects trading symbols like NIFTY25MAR23000CE, not numeric tokens.
         
         Returns:
-            Dict mapping symbol -> quote data
+            Dict mapping trading_symbol -> quote data
         """
         if not self.base_url or not self.access_token:
             logger.error("No base_url or access_token for batch quotes")
@@ -426,33 +428,51 @@ class KotakOptionsService:
                     'Content-Type': 'application/json'
                 }
                 
-                # Format: nse_fo|SYM1,nse_fo|SYM2,...
+                # Format: nse_fo|NIFTY25MAR23000CE,nse_fo|NIFTY25MAR23050CE,...
                 queries = [f"{seg}|{sym}" for seg, sym in batch]
                 query_str = ','.join(queries)
                 url = f"{self.base_url}/script-details/1.0/quotes/neosymbol/{query_str}/all"
                 
-                logger.info(f"Batch quotes URL: {url[:150]}...")
+                logger.info(f"Batch quotes URL: {url[:200]}...")
+                logger.info(f"Requesting quotes for {len(batch)} instruments")
                 
                 async with httpx.AsyncClient(timeout=60) as client:
                     response = await client.get(url, headers=headers)
                     
-                    logger.info(f"Batch quotes response: {response.status_code}")
+                    logger.info(f"Batch quotes response status: {response.status_code}")
                     
                     if response.status_code == 200:
                         data = response.json()
                         if isinstance(data, list):
                             logger.info(f"Got {len(data)} quotes in batch response")
                             for quote in data:
-                                symbol = quote.get('display_symbol', quote.get('exchange_token', ''))
+                                # Map using various possible keys
+                                # Try trading_symbol, then display_symbol, then exchange_token
+                                symbol = (
+                                    quote.get('trading_symbol') or 
+                                    quote.get('tradingSymbol') or
+                                    quote.get('display_symbol') or 
+                                    quote.get('displaySymbol') or
+                                    quote.get('exchange_token') or
+                                    quote.get('symbol', '')
+                                )
                                 if symbol:
                                     results[symbol] = quote
+                                    # Log first quote for debugging
+                                    if len(results) == 1:
+                                        logger.info(f"Sample quote keys: {list(quote.keys())[:10]}")
+                                        logger.info(f"Mapped to symbol: {symbol}")
                         else:
                             logger.warning(f"Unexpected response format: {type(data)}")
+                            logger.info(f"Response preview: {str(data)[:300]}")
                     else:
-                        logger.error(f"Batch quotes error: {response.status_code} - {response.text[:200]}")
+                        logger.error(f"Batch quotes error: {response.status_code}")
+                        logger.error(f"Response body: {response.text[:500]}")
                                     
             except Exception as e:
                 logger.error(f"Error getting batch quotes: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
         
         return results
     
@@ -524,22 +544,31 @@ class KotakOptionsService:
         logger.info(f"Found {len(strikes)} strikes for {underlying} {expiry}")
         
         # Build instrument list for batch quote
+        # IMPORTANT: Kotak Quotes API requires trading_symbol (e.g., NIFTY25MAR23000CE)
+        # NOT the numeric instrument token (pSymbol)
         instruments_to_quote = []
         contract_map = {}  # (strike, type) -> contract
+        symbol_to_contract = {}  # trading_symbol -> contract (for mapping quotes back)
         
         for c in contracts:
             if c['strike'] in strikes:
                 key = (c['strike'], c['option_type'])
                 contract_map[key] = c
-                # Use pSymbol (token) for quotes API
-                instruments_to_quote.append(('nse_fo', c['symbol']))
+                # Use trading_symbol for the Quotes API (e.g., NIFTY25MAR23000CE)
+                trading_sym = c.get('trading_symbol', '')
+                if trading_sym:
+                    instruments_to_quote.append(('nse_fo', trading_sym))
+                    symbol_to_contract[trading_sym] = c
         
         logger.info(f"Fetching quotes for {len(instruments_to_quote)} option contracts")
         if instruments_to_quote:
-            logger.info(f"Sample symbols: {[i[1] for i in instruments_to_quote[:3]]}")
+            # Log first few to see format
+            sample = instruments_to_quote[:5]
+            logger.info(f"Sample instruments (trading symbols): {sample}")
         
-        # Get live quotes
+        # Get live quotes using trading symbols
         quotes = await self.get_batch_quotes(instruments_to_quote)
+        
         logger.info(f"Got {len(quotes)} live quotes from Kotak API")
         
         # Build calls and puts
@@ -552,7 +581,9 @@ class KotakOptionsService:
         for strike in strikes:
             # Call
             ce_contract = contract_map.get((strike, 'CE'))
-            ce_quote = quotes.get(ce_contract['symbol']) if ce_contract else None
+            # Look up quote by trading_symbol (the key used in quotes response)
+            ce_trading_sym = ce_contract.get('trading_symbol', '') if ce_contract else ''
+            ce_quote = quotes.get(ce_trading_sym) if ce_trading_sym else None
             
             ce_ltp = float(ce_quote.get('ltp', 0)) if ce_quote else 0
             ce_oi = int(ce_quote.get('open_interest', 0)) if ce_quote else 0
@@ -604,7 +635,9 @@ class KotakOptionsService:
             
             # Put
             pe_contract = contract_map.get((strike, 'PE'))
-            pe_quote = quotes.get(pe_contract['symbol']) if pe_contract else None
+            # Look up quote by trading_symbol (the key used in quotes response)
+            pe_trading_sym = pe_contract.get('trading_symbol', '') if pe_contract else ''
+            pe_quote = quotes.get(pe_trading_sym) if pe_trading_sym else None
             
             pe_ltp = float(pe_quote.get('ltp', 0)) if pe_quote else 0
             pe_oi = int(pe_quote.get('open_interest', 0)) if pe_quote else 0
