@@ -370,6 +370,11 @@ class KotakOptionsService:
             Dict mapping symbol -> quote data
         """
         if not self.base_url or not self.access_token:
+            logger.error("No base_url or access_token for batch quotes")
+            return {}
+        
+        if not instruments:
+            logger.warning("No instruments provided for batch quotes")
             return {}
         
         results = {}
@@ -390,16 +395,25 @@ class KotakOptionsService:
                 query_str = ','.join(queries)
                 url = f"{self.base_url}/script-details/1.0/quotes/neosymbol/{query_str}/all"
                 
+                logger.info(f"Batch quotes URL: {url[:150]}...")
+                
                 async with httpx.AsyncClient(timeout=60) as client:
                     response = await client.get(url, headers=headers)
+                    
+                    logger.info(f"Batch quotes response: {response.status_code}")
                     
                     if response.status_code == 200:
                         data = response.json()
                         if isinstance(data, list):
+                            logger.info(f"Got {len(data)} quotes in batch response")
                             for quote in data:
                                 symbol = quote.get('display_symbol', quote.get('exchange_token', ''))
                                 if symbol:
                                     results[symbol] = quote
+                        else:
+                            logger.warning(f"Unexpected response format: {type(data)}")
+                    else:
+                        logger.error(f"Batch quotes error: {response.status_code} - {response.text[:200]}")
                                     
             except Exception as e:
                 logger.error(f"Error getting batch quotes: {e}")
@@ -471,6 +485,7 @@ class KotakOptionsService:
                 strikes_set.add(strike)
         
         strikes = sorted(list(strikes_set))
+        logger.info(f"Found {len(strikes)} strikes for {underlying} {expiry}")
         
         # Build instrument list for batch quote
         instruments_to_quote = []
@@ -480,10 +495,16 @@ class KotakOptionsService:
             if c['strike'] in strikes:
                 key = (c['strike'], c['option_type'])
                 contract_map[key] = c
+                # Use pSymbol (token) for quotes API
                 instruments_to_quote.append(('nse_fo', c['symbol']))
+        
+        logger.info(f"Fetching quotes for {len(instruments_to_quote)} option contracts")
+        if instruments_to_quote:
+            logger.info(f"Sample symbols: {[i[1] for i in instruments_to_quote[:3]]}")
         
         # Get live quotes
         quotes = await self.get_batch_quotes(instruments_to_quote)
+        logger.info(f"Got {len(quotes)} live quotes from Kotak API")
         
         # Build calls and puts
         calls = []
