@@ -32,6 +32,7 @@ from options_chain import options_chain_generator, OptionsChain
 from websocket_manager import ws_manager
 from kotak_hsm import KotakHSMWebSocket, get_hsm_client, set_hsm_client
 from kotak_scrip_master import scrip_master, KotakScripMaster
+from live_price_poller import live_price_poller, get_live_poller
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -139,8 +140,8 @@ async def login_totp(request: LoginTOTPRequest):
     return result
 
 @api_router.post("/auth/mpin")
-async def login_mpin(request: LoginMPINRequest):
-    """Step 2: Validate MPIN"""
+async def login_mpin(request: LoginMPINRequest, background_tasks: BackgroundTasks):
+    """Step 2: Validate MPIN and start live price polling"""
     global kotak_api
     
     if not kotak_api:
@@ -151,18 +152,33 @@ async def login_mpin(request: LoginMPINRequest):
     if not result.get('success'):
         raise HTTPException(status_code=401, detail=result.get('error', 'MPIN validation failed'))
     
+    # Start live price poller automatically after successful login
+    live_price_poller.set_kotak_api(kotak_api)
+    if not live_price_poller.is_running:
+        background_tasks.add_task(start_live_poller)
+        result['live_poller'] = "Starting..."
+    else:
+        result['live_poller'] = "Already running"
+    
     return result
+
+async def start_live_poller():
+    """Start the live price poller"""
+    await live_price_poller.start()
+    logger.info("Live price poller started after authentication")
 
 @api_router.get("/auth/status")
 async def auth_status():
     """Check authentication status"""
     if kotak_api and kotak_api.session.is_authenticated:
         hsm = get_hsm_client()
+        poller = get_live_poller()
         return {
             "authenticated": True,
             "mode": "live",
             "user_id": kotak_api.session.user_id,
             "hsm_connected": hsm.is_connected if hsm else False,
+            "live_poller_running": poller.is_running if poller else False,
             "session_info": {
                 "has_edit_token": bool(kotak_api.session.edit_token),
                 "has_edit_sid": bool(kotak_api.session.edit_sid),
@@ -295,6 +311,127 @@ async def hsm_status():
             "latest_ticks": {k: {"ltp": v.ltp, "change": v.change} for k, v in hsm.get_all_ticks().items()}
         }
     return {"connected": False, "message": "HSM client not initialized"}
+
+# ==================== LIVE PRICE POLLER ====================
+
+@api_router.post("/live-prices/start")
+async def start_price_poller(background_tasks: BackgroundTasks):
+    """Start the live price poller"""
+    if not kotak_api or not kotak_api.session.is_authenticated:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    live_price_poller.set_kotak_api(kotak_api)
+    
+    if live_price_poller.is_running:
+        return {"success": True, "message": "Poller already running", "stats": live_price_poller.get_stats()}
+    
+    background_tasks.add_task(start_live_poller)
+    return {"success": True, "message": "Poller starting...", "stats": live_price_poller.get_stats()}
+
+@api_router.post("/live-prices/stop")
+async def stop_price_poller():
+    """Stop the live price poller"""
+    if live_price_poller.is_running:
+        await live_price_poller.stop()
+        return {"success": True, "message": "Poller stopped"}
+    return {"success": True, "message": "Poller was not running"}
+
+@api_router.get("/live-prices/status")
+async def price_poller_status():
+    """Get live price poller status"""
+    poller = get_live_poller()
+    return {
+        "success": True,
+        "stats": poller.get_stats() if poller else {}
+    }
+
+@api_router.get("/live-prices/latest")
+async def get_live_prices():
+    """Get all latest live prices"""
+    poller = get_live_poller()
+    if not poller or not poller.is_running:
+        return {
+            "success": False,
+            "error": "Poller not running",
+            "prices": {}
+        }
+    
+    prices = {}
+    for symbol, price in poller.get_all_prices().items():
+        prices[symbol] = {
+            "ltp": price.ltp,
+            "open": price.open,
+            "high": price.high,
+            "low": price.low,
+            "close": price.close,
+            "change": price.change,
+            "change_percent": price.change_percent,
+            "timestamp": price.timestamp
+        }
+    
+    return {
+        "success": True,
+        "prices": prices,
+        "poll_count": poller.poll_count,
+        "last_poll": poller.last_poll_time.isoformat() if poller.last_poll_time else None
+    }
+
+@api_router.get("/live-prices/{symbol}")
+async def get_live_price(symbol: str):
+    """Get live price for a specific symbol"""
+    poller = get_live_poller()
+    
+    # First check poller cache
+    if poller and poller.is_running:
+        price = poller.get_price(symbol)
+        if price:
+            return {
+                "success": True,
+                "symbol": symbol.upper(),
+                "ltp": price.ltp,
+                "open": price.open,
+                "high": price.high,
+                "low": price.low,
+                "close": price.close,
+                "change": price.change,
+                "change_percent": price.change_percent,
+                "timestamp": price.timestamp,
+                "source": "live_poller"
+            }
+    
+    # Fall back to direct API call
+    if kotak_api and kotak_api.session.is_authenticated:
+        symbol_upper = symbol.upper()
+        is_index = symbol_upper in ['NIFTY', 'BANKNIFTY']
+        
+        if is_index:
+            result = await kotak_api.get_index_quote(symbol_upper)
+        else:
+            result = await kotak_api.get_quotes(
+                [{"exchange_segment": "nse_cm", "symbol": symbol_upper}],
+                quote_type='all'
+            )
+        
+        if result.get('success') and result.get('quotes'):
+            quotes = result['quotes']
+            if isinstance(quotes, list) and len(quotes) > 0:
+                q = quotes[0]
+                ohlc = q.get('ohlc', {})
+                return {
+                    "success": True,
+                    "symbol": symbol_upper,
+                    "ltp": float(q.get('ltp', 0)),
+                    "open": float(ohlc.get('open', 0)) if ohlc else 0,
+                    "high": float(ohlc.get('high', 0)) if ohlc else 0,
+                    "low": float(ohlc.get('low', 0)) if ohlc else 0,
+                    "close": float(ohlc.get('close', 0)) if ohlc else 0,
+                    "change": float(q.get('change', 0)),
+                    "change_percent": float(q.get('per_change', 0)),
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "source": "api_direct"
+                }
+    
+    return {"success": False, "error": f"Price not available for {symbol}"}
 
 # ==================== SCRIP MASTER ====================
 
@@ -1068,19 +1205,33 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    # Try to get LIVE spot price first
+    # Try to get LIVE spot price - first from poller, then direct API
     spot_price = None
-    if kotak_api and kotak_api.session.is_authenticated:
+    price_source = "unknown"
+    
+    # 1. Check live price poller cache first (fastest)
+    poller = get_live_poller()
+    if poller and poller.is_running:
+        cached_price = poller.get_price(underlying_upper)
+        if cached_price and cached_price.ltp > 0:
+            spot_price = cached_price.ltp
+            price_source = "live_poller"
+            logger.info(f"Using POLLER spot price for {underlying_upper}: {spot_price}")
+    
+    # 2. Fall back to direct API call
+    if not spot_price and kotak_api and kotak_api.session.is_authenticated:
         result = await kotak_api.get_index_quote(underlying_upper)
         if result.get('success') and result.get('quotes'):
             quotes = result['quotes']
             if isinstance(quotes, list) and len(quotes) > 0:
                 spot_price = float(quotes[0].get('ltp', 0))
-                logger.info(f"Using LIVE spot price for {underlying_upper}: {spot_price}")
+                price_source = "live_api"
+                logger.info(f"Using LIVE API spot price for {underlying_upper}: {spot_price}")
     
-    # Fallback to simulation price
+    # 3. Fallback to simulation price
     if not spot_price or spot_price <= 0:
         spot_price = simulator.get_ltp(underlying_upper)
+        price_source = "simulation"
         logger.info(f"Using SIMULATION spot price for {underlying_upper}: {spot_price}")
     
     if not spot_price:
@@ -1099,6 +1250,7 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
         "success": True,
         "underlying": chain.underlying,
         "spot_price": chain.spot_price,
+        "price_source": price_source,
         "expiry": chain.expiry,
         "atm_strike": chain.atm_strike,
         "pcr": chain.pcr,
