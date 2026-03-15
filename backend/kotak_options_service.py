@@ -185,29 +185,49 @@ class KotakOptionsService:
             self.banknifty_options = {}
             
             row_count = 0
+            option_count = 0
+            nifty_count = 0
+            banknifty_count = 0
+            
+            # Get column names
+            fieldnames = reader.fieldnames
+            logger.info(f"Scripmaster CSV columns: {fieldnames[:15] if fieldnames else 'None'}")
+            
             for row in reader:
                 row_count += 1
                 
-                # Get key fields
-                symbol = row.get('pSymbol', row.get('symbol', ''))
-                trading_symbol = row.get('pTrdSymbol', row.get('tradingSymbol', ''))
-                instrument_type = row.get('pInstType', row.get('instrumentType', ''))
-                option_type = row.get('pOptionType', row.get('optionType', ''))
+                # Log first few rows for debugging
+                if row_count <= 3:
+                    logger.info(f"Sample row {row_count}: {dict(list(row.items())[:8])}")
+                
+                # Get key fields - try multiple column name variations
+                symbol = row.get('pSymbol', row.get('symbol', row.get('Symbol', '')))
+                trading_symbol = row.get('pTrdSymbol', row.get('tradingSymbol', row.get('TradingSymbol', '')))
+                instrument_type = row.get('pInstType', row.get('instrumentType', row.get('InstrumentType', '')))
+                option_type = row.get('pOptionType', row.get('optionType', row.get('OptionType', '')))
                 
                 # Skip if not an option
                 if option_type not in ['CE', 'PE']:
                     continue
                 
+                option_count += 1
+                
                 # Get underlying
-                underlying = row.get('pUnderlying', row.get('underlying', ''))
+                underlying = row.get('pUnderlying', row.get('underlying', row.get('Underlying', '')))
+                
+                # Log some option rows for debugging
+                if option_count <= 5:
+                    logger.info(f"Option {option_count}: symbol={symbol}, trading={trading_symbol}, underlying={underlying}, type={option_type}")
                 
                 # Check if NIFTY or BANKNIFTY option
                 is_nifty = False
                 is_banknifty = False
                 
-                if 'BANKNIFTY' in trading_symbol.upper() or 'NIFTY BANK' in underlying.upper():
+                combined = f"{trading_symbol} {underlying}".upper()
+                
+                if 'BANKNIFTY' in combined or 'NIFTY BANK' in combined:
                     is_banknifty = True
-                elif 'NIFTY' in trading_symbol.upper() and 'BANK' not in trading_symbol.upper():
+                elif 'NIFTY' in combined and 'BANK' not in combined and 'FIN' not in combined:
                     is_nifty = True
                 
                 if not is_nifty and not is_banknifty:
@@ -280,12 +300,14 @@ class KotakOptionsService:
                 
                 # Store by underlying and expiry
                 if is_nifty:
+                    nifty_count += 1
                     nifty_expiry_set.add(expiry_date)
                     if expiry_date not in self.nifty_options:
                         self.nifty_options[expiry_date] = []
                     self.nifty_options[expiry_date].append(contract)
                     
                 elif is_banknifty:
+                    banknifty_count += 1
                     banknifty_expiry_set.add(expiry_date)
                     if expiry_date not in self.banknifty_options:
                         self.banknifty_options[expiry_date] = []
@@ -297,10 +319,13 @@ class KotakOptionsService:
             
             self.last_scripmaster_update = datetime.now()
             
-            logger.info(f"Parsed {row_count} rows from scripmaster")
-            logger.info(f"NIFTY expiries: {self.nifty_expiries[:5]}")
-            logger.info(f"BANKNIFTY expiries: {self.banknifty_expiries[:5]}")
-            logger.info(f"NIFTY options by expiry: {len(self.nifty_options)} expiries")
+            logger.info(f"Scripmaster parsing complete:")
+            logger.info(f"  Total rows: {row_count}")
+            logger.info(f"  Total options: {option_count}")
+            logger.info(f"  NIFTY options: {nifty_count}")
+            logger.info(f"  BANKNIFTY options: {banknifty_count}")
+            logger.info(f"  NIFTY expiries: {self.nifty_expiries[:5]}")
+            logger.info(f"  BANKNIFTY expiries: {self.banknifty_expiries[:5]}")
             
             return len(self.nifty_expiries) > 0 or len(self.banknifty_expiries) > 0
             
