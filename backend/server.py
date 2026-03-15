@@ -264,29 +264,66 @@ async def get_quote(symbol: str):
 @api_router.get("/market/candles/{symbol}")
 async def get_candles(symbol: str, count: int = 100):
     """Get historical candles for a symbol"""
-    candles = simulator.get_candles(symbol.upper())
+    symbol_upper = symbol.upper()
+    
+    # Get live price to scale candles appropriately
+    live_price = None
+    if kotak_api and kotak_api.session.is_authenticated:
+        is_index = symbol_upper in ['NIFTY', 'BANKNIFTY']
+        if is_index:
+            result = await kotak_api.get_index_quote(symbol_upper)
+        else:
+            result = await kotak_api.get_quotes(
+                [{"exchange_segment": "nse_cm", "symbol": symbol_upper}],
+                quote_type='all',
+                is_index=False
+            )
+        if result.get('success') and result.get('quotes'):
+            quotes = result['quotes']
+            if isinstance(quotes, list) and len(quotes) > 0:
+                live_price = float(quotes[0].get('ltp', 0))
+    
+    candles = simulator.get_candles(symbol_upper)
     
     if not candles:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
     
-    # Return last N candles
-    candles_data = [
-        {
-            "open": c.open,
-            "high": c.high,
-            "low": c.low,
-            "close": c.close,
-            "volume": c.volume,
-            "timestamp": c.timestamp
-        }
-        for c in candles[-count:]
-    ]
+    # If we have live price, scale the candles to match
+    candles_data = []
+    if live_price and live_price > 0:
+        # Get the last simulated price and calculate scale factor
+        last_sim_price = candles[-1].close if candles else 24500
+        scale_factor = live_price / last_sim_price
+        
+        for c in candles[-count:]:
+            candles_data.append({
+                "open": round(c.open * scale_factor, 2),
+                "high": round(c.high * scale_factor, 2),
+                "low": round(c.low * scale_factor, 2),
+                "close": round(c.close * scale_factor, 2),
+                "volume": c.volume,
+                "timestamp": c.timestamp
+            })
+    else:
+        # No live price, use simulation data as-is
+        candles_data = [
+            {
+                "open": c.open,
+                "high": c.high,
+                "low": c.low,
+                "close": c.close,
+                "volume": c.volume,
+                "timestamp": c.timestamp
+            }
+            for c in candles[-count:]
+        ]
     
     return {
         "success": True,
-        "symbol": symbol.upper(),
+        "symbol": symbol_upper,
         "candles": candles_data,
-        "count": len(candles_data)
+        "count": len(candles_data),
+        "mode": "live_scaled" if live_price else "simulation"
     }
 
 @api_router.get("/market/tick/{symbol}")
@@ -810,12 +847,25 @@ async def get_options_chain(underlying: str, expiry: Optional[str] = None, strik
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    # Get current spot price
-    spot_price = simulator.get_ltp(underlying_upper)
+    # Try to get LIVE spot price first
+    spot_price = None
+    if kotak_api and kotak_api.session.is_authenticated:
+        result = await kotak_api.get_index_quote(underlying_upper)
+        if result.get('success') and result.get('quotes'):
+            quotes = result['quotes']
+            if isinstance(quotes, list) and len(quotes) > 0:
+                spot_price = float(quotes[0].get('ltp', 0))
+                logger.info(f"Using LIVE spot price for {underlying_upper}: {spot_price}")
+    
+    # Fallback to simulation price
+    if not spot_price or spot_price <= 0:
+        spot_price = simulator.get_ltp(underlying_upper)
+        logger.info(f"Using SIMULATION spot price for {underlying_upper}: {spot_price}")
+    
     if not spot_price:
         raise HTTPException(status_code=400, detail=f"No price data for {underlying_upper}")
     
-    # Generate options chain
+    # Generate options chain with the spot price
     chain = options_chain_generator.generate_chain(
         underlying=underlying_upper,
         spot_price=spot_price,
@@ -847,7 +897,19 @@ async def get_options_signal(underlying: str, expiry: Optional[str] = None):
     if underlying_upper not in ['NIFTY', 'BANKNIFTY']:
         raise HTTPException(status_code=400, detail="Options available only for NIFTY and BANKNIFTY")
     
-    spot_price = simulator.get_ltp(underlying_upper)
+    # Try to get LIVE spot price first
+    spot_price = None
+    if kotak_api and kotak_api.session.is_authenticated:
+        result = await kotak_api.get_index_quote(underlying_upper)
+        if result.get('success') and result.get('quotes'):
+            quotes = result['quotes']
+            if isinstance(quotes, list) and len(quotes) > 0:
+                spot_price = float(quotes[0].get('ltp', 0))
+    
+    # Fallback to simulation price
+    if not spot_price or spot_price <= 0:
+        spot_price = simulator.get_ltp(underlying_upper)
+    
     if not spot_price:
         raise HTTPException(status_code=400, detail=f"No price data for {underlying_upper}")
     
