@@ -586,59 +586,62 @@ class KotakNeoAPI:
         """
         Get real-time quotes for instruments using Kotak Neo API v2.
         
-        The quotes endpoint is at the LOGIN_BASE_URL, not the trading baseUrl.
-        POST https://mis.kotaksecurities.com/script-details/1.0/quotes/
+        Correct endpoint format (GET request):
+        GET {baseUrl}/script-details/1.0/quotes/neosymbol/{exchange}|{symbol}[,{exchange}|{symbol}]/{filter}
+        
+        Examples:
+        - Index: /script-details/1.0/quotes/neosymbol/nse_cm|Nifty 50/all
+        - Stock: /script-details/1.0/quotes/neosymbol/nse_cm|RELIANCE/ltp
+        - Multiple: /script-details/1.0/quotes/neosymbol/nse_cm|Nifty 50,nse_cm|Nifty Bank/all
         
         Args:
-            instrument_tokens: List of dicts with instrument_token and exchange_segment
-                Example: [{"instrument_token": "11536", "exchange_segment": "nse_cm"}]
-            quote_type: ltp, market_depth, ohlc, 52w, circuit_limits, scrip_details, all
-            is_index: Set to True for index instruments (NIFTY, BANKNIFTY)
+            instrument_tokens: List of dicts with exchange_segment and symbol
+                Example: [{"exchange_segment": "nse_cm", "symbol": "Nifty 50"}]
+            quote_type: all, ltp, ohlc, depth, 52W, circuit_limits, oi, scrip_details
+            is_index: Set to True for index instruments
         """
-        # Quotes endpoint is at the LOGIN_BASE_URL (mis.kotaksecurities.com)
-        # NOT at the trading baseUrl (e41.kotaksecurities.com)
-        url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes/'
+        if not self.session.is_authenticated or not self.session.base_url:
+            logger.warning("Not authenticated, cannot fetch live quotes")
+            return {'success': False, 'error': 'Not authenticated'}
         
-        # Use auth headers with session credentials
+        # Build query string: exchange|symbol,exchange|symbol
+        queries = []
+        for token in instrument_tokens:
+            exchange = token.get('exchange_segment', 'nse_cm')
+            symbol = token.get('symbol', token.get('instrument_token', ''))
+            queries.append(f"{exchange}|{symbol}")
+        
+        query_string = ','.join(queries)
+        filter_name = quote_type if quote_type else 'all'
+        
+        # Build URL: GET {baseUrl}/script-details/1.0/quotes/neosymbol/{query}/{filter}
+        url = f'{self.session.base_url}/script-details/1.0/quotes/neosymbol/{query_string}/{filter_name}'
+        
         headers = {
             'Content-Type': 'application/json',
             'Authorization': self.consumer_key
         }
         
-        # Add session credentials if authenticated
-        if self.session.is_authenticated:
-            headers['sid'] = self.session.edit_sid
-            headers['Auth'] = self.session.edit_token
-            headers['neo-fin-key'] = self.session.neo_fin_key or self.DEFAULT_NEO_FIN_KEY
-        
-        body = {
-            'instrument_tokens': instrument_tokens,
-            'quote_type': quote_type or 'ltp',
-            'isIndex': is_index
-        }
-        
-        logger.info(f"Quotes request to: {url}")
-        logger.info(f"Quotes body: {body}")
+        logger.info(f"Quotes GET request to: {url}")
         
         try:
-            response = await self.client.post(
-                url,
-                json=body,
-                headers=headers
-            )
+            response = await self.client.get(url, headers=headers)
             
             logger.info(f"Quotes response status: {response.status_code}")
             logger.info(f"Quotes response: {response.text[:500]}")
             
-            data = response.json()
-            
             if 200 <= response.status_code <= 299:
-                quotes_data = data.get('data', data.get('message', data))
-                return {'success': True, 'quotes': quotes_data, 'raw_response': data}
+                data = response.json()
+                # Response is an array of quote objects
+                return {'success': True, 'quotes': data, 'raw_response': data}
             else:
-                error = data.get('message', data.get('error', 'Failed to get quotes'))
+                try:
+                    data = response.json()
+                    error = data.get('emsg', data.get('message', 'Failed to get quotes'))
+                except:
+                    error = response.text
                 logger.error(f"Quotes API error: {error}")
-                return {'success': False, 'error': error, 'raw_response': data}
+                return {'success': False, 'error': error}
         except Exception as e:
             logger.error(f'Get quotes error: {e}')
             return {'success': False, 'error': str(e)}
@@ -647,23 +650,29 @@ class KotakNeoAPI:
         """
         Get quote for index instruments like NIFTY, BANKNIFTY.
         
-        Index tokens from Kotak scrip master:
-        - NIFTY 50: 26000 (nse_cm)
-        - NIFTY BANK: 26009 (nse_cm)
+        Uses exact case-sensitive index names as per Kotak API:
+        - "Nifty 50" for NIFTY
+        - "Nifty Bank" for BANKNIFTY
         """
-        # Correct index instrument tokens from Kotak scrip master
-        index_tokens = {
-            'NIFTY': {'instrument_token': '26000', 'exchange_segment': 'nse_cm'},
-            'NIFTY 50': {'instrument_token': '26000', 'exchange_segment': 'nse_cm'},
-            'BANKNIFTY': {'instrument_token': '26009', 'exchange_segment': 'nse_cm'},
-            'NIFTY BANK': {'instrument_token': '26009', 'exchange_segment': 'nse_cm'},
+        # Map common names to exact Kotak index names (case-sensitive!)
+        index_mapping = {
+            'NIFTY': 'Nifty 50',
+            'NIFTY50': 'Nifty 50',
+            'NIFTY 50': 'Nifty 50',
+            'BANKNIFTY': 'Nifty Bank',
+            'NIFTYBANK': 'Nifty Bank',
+            'NIFTY BANK': 'Nifty Bank',
         }
         
-        token_info = index_tokens.get(symbol.upper())
-        if not token_info:
+        kotak_symbol = index_mapping.get(symbol.upper())
+        if not kotak_symbol:
             return {'success': False, 'error': f'Unknown index: {symbol}'}
         
-        return await self.get_quotes([token_info], quote_type='ltp', is_index=True)
+        return await self.get_quotes(
+            [{"exchange_segment": "nse_cm", "symbol": kotak_symbol}],
+            quote_type='all',
+            is_index=True
+        )
     
     async def get_quotes_v2(self, instrument_tokens: list, quote_type: str = 'ltp') -> Dict:
         """

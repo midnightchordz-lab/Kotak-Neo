@@ -218,49 +218,38 @@ async def get_quote(symbol: str):
         # Determine if this is an index
         is_index = symbol_upper in ['NIFTY', 'BANKNIFTY', 'NIFTY 50', 'NIFTY BANK']
         
-        # Get instrument token based on symbol type
         if is_index:
             result = await kotak_api.get_index_quote(symbol_upper)
         else:
-            # For stocks, use the instrument token format
-            instrument_info = simulator.instruments.get(symbol_upper, {})
-            token = instrument_info.get('token', symbol_upper)
-            segment = instrument_info.get('segment', 'nse_cm')
-            
+            # For stocks, use pSymbol from instrument list
             result = await kotak_api.get_quotes(
-                [{"instrument_token": token, "exchange_segment": segment}],
-                quote_type='ltp',
+                [{"exchange_segment": "nse_cm", "symbol": symbol_upper}],
+                quote_type='all',
                 is_index=False
             )
         
         if result.get('success') and result.get('quotes'):
             quotes = result['quotes']
-            # Parse the Kotak response format
+            # Parse the Kotak response format (array of quote objects)
             if isinstance(quotes, list) and len(quotes) > 0:
                 q = quotes[0]
+                ohlc = q.get('ohlc', {})
                 return {
                     "success": True,
                     "quote": {
                         "symbol": symbol_upper,
-                        "ltp": float(q.get('last_traded_price', q.get('ltp', 0))),
-                        "open": float(q.get('ohlc', {}).get('open', 0)) if isinstance(q.get('ohlc'), dict) else 0,
-                        "high": float(q.get('ohlc', {}).get('high', 0)) if isinstance(q.get('ohlc'), dict) else 0,
-                        "low": float(q.get('ohlc', {}).get('low', 0)) if isinstance(q.get('ohlc'), dict) else 0,
-                        "close": float(q.get('ohlc', {}).get('close', 0)) if isinstance(q.get('ohlc'), dict) else 0,
-                        "volume": int(q.get('volume', 0)),
-                        "change": 0,
-                        "change_percent": 0
-                    },
-                    "mode": "live"
-                }
-            elif isinstance(quotes, dict):
-                # Single quote response
-                return {
-                    "success": True,
-                    "quote": {
-                        "symbol": symbol_upper,
-                        "ltp": float(quotes.get('last_traded_price', quotes.get('ltp', 0))),
-                        "volume": int(quotes.get('volume', 0)),
+                        "ltp": float(q.get('ltp', 0)),
+                        "open": float(ohlc.get('open', 0)) if ohlc else 0,
+                        "high": float(ohlc.get('high', 0)) if ohlc else 0,
+                        "low": float(ohlc.get('low', 0)) if ohlc else 0,
+                        "close": float(ohlc.get('close', 0)) if ohlc else 0,
+                        "volume": int(q.get('last_volume', 0)),
+                        "change": float(q.get('change', 0)),
+                        "change_percent": float(q.get('per_change', 0)),
+                        "bid": float(q.get('depth', {}).get('buy', [{}])[0].get('price', 0)) if q.get('depth') else 0,
+                        "ask": float(q.get('depth', {}).get('sell', [{}])[0].get('price', 0)) if q.get('depth') else 0,
+                        "total_buy": int(q.get('total_buy', 0)),
+                        "total_sell": int(q.get('total_sell', 0)),
                     },
                     "mode": "live"
                 }
