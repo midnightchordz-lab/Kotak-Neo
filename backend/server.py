@@ -31,6 +31,7 @@ from backtester import Backtester
 from options_chain import options_chain_generator, OptionsChain
 from websocket_manager import ws_manager
 from kotak_hsm import KotakHSMWebSocket, get_hsm_client, set_hsm_client
+from kotak_scrip_master import scrip_master, KotakScripMaster
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL', 'mongodb://localhost:27017')
@@ -273,6 +274,97 @@ async def hsm_status():
             "latest_ticks": {k: {"ltp": v.ltp, "change": v.change} for k, v in hsm.get_all_ticks().items()}
         }
     return {"connected": False, "message": "HSM client not initialized"}
+
+# ==================== SCRIP MASTER ====================
+
+@api_router.post("/scrip-master/fetch")
+async def fetch_scrip_master():
+    """
+    Fetch scrip master from Kotak to get real instrument tokens
+    Required for subscribing to option contracts via HSM
+    """
+    if not kotak_api or not kotak_api.session.is_authenticated:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    access_token = kotak_api.consumer_key
+    success = await scrip_master.fetch_scrip_master(access_token)
+    
+    if success:
+        return {
+            "success": True,
+            "nifty_expiries": scrip_master.get_expiries('NIFTY'),
+            "banknifty_expiries": scrip_master.get_expiries('BANKNIFTY'),
+            "total_nifty_options": sum(len(v) for v in scrip_master.nifty_options.values()),
+            "total_banknifty_options": sum(len(v) for v in scrip_master.banknifty_options.values())
+        }
+    else:
+        return {"success": False, "error": "Failed to fetch scrip master"}
+
+@api_router.get("/scrip-master/expiries/{underlying}")
+async def get_real_expiries(underlying: str):
+    """Get real expiry dates from scrip master"""
+    underlying_upper = underlying.upper()
+    
+    # If scrip master has data, use it
+    expiries = scrip_master.get_expiries(underlying_upper)
+    if expiries:
+        return {
+            "success": True,
+            "underlying": underlying_upper,
+            "expiries": expiries,
+            "source": "scrip_master"
+        }
+    
+    # Fallback: Try to get expiries from Kotak quotes API
+    # Use generated expiries as last resort
+    return {
+        "success": True,
+        "underlying": underlying_upper,
+        "expiries": options_chain_generator.generate_expiries(),
+        "source": "generated"
+    }
+
+@api_router.post("/hsm/subscribe-options")
+async def subscribe_options_via_hsm(underlying: str = "NIFTY", expiry: str = "", num_strikes: int = 10):
+    """
+    Subscribe to real option contracts via HSM WebSocket
+    
+    This will stream live prices for options around ATM
+    """
+    hsm = get_hsm_client()
+    if not hsm or not hsm.is_connected:
+        raise HTTPException(status_code=400, detail="HSM not connected. Call /api/hsm/connect first.")
+    
+    # Get live spot price for ATM calculation
+    spot_price = 23150  # Default
+    if kotak_api and kotak_api.session.is_authenticated:
+        result = await kotak_api.get_index_quote(underlying.upper())
+        if result.get('success') and result.get('quotes'):
+            quotes = result['quotes']
+            if isinstance(quotes, list) and len(quotes) > 0:
+                spot_price = float(quotes[0].get('ltp', 23150))
+    
+    # Get subscription tokens from scrip master or generate them
+    if scrip_master.last_updated:
+        # Use real tokens from scrip master
+        tokens_str = scrip_master.get_subscription_tokens(underlying.upper(), expiry, spot_price, num_strikes)
+    else:
+        # Generate option symbols
+        options = scrip_master.generate_option_symbols(underlying.upper(), spot_price, expiry, num_strikes)
+        tokens_str = "&".join([f"nse_fo|{opt['symbol']}" for opt in options]) + "&"
+    
+    if tokens_str:
+        await hsm.subscribe_scrip(tokens_str)
+        return {
+            "success": True,
+            "underlying": underlying.upper(),
+            "expiry": expiry,
+            "spot_price": spot_price,
+            "subscribed": tokens_str,
+            "message": f"Subscribed to options around strike {int(spot_price)}"
+        }
+    
+    return {"success": False, "error": "Could not generate subscription tokens"}
 
 # ==================== SIMULATION CONTROL ====================
 
