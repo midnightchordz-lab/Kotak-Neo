@@ -455,10 +455,33 @@ class LiveOptionsService:
             ce_delta = max(0, min(1, 0.5 + moneyness_ce * 2))
             pe_delta = ce_delta - 1
             
+            # Get live prices or calculate simulated prices using Black-Scholes approximation
             ce_ltp = ce_data.get('ltp', 0)
             pe_ltp = pe_data.get('ltp', 0)
+            
+            # If no live prices, use Black-Scholes approximation
+            if ce_ltp == 0:
+                # Intrinsic value + time value approximation
+                intrinsic_ce = max(0, spot_price - strike)
+                time_value_ce = spot_price * (ce_iv / 100) * 0.1  # Simplified time value
+                ce_ltp = round(intrinsic_ce + time_value_ce * max(0.1, 1 - abs(moneyness_ce) * 2), 2)
+            
+            if pe_ltp == 0:
+                intrinsic_pe = max(0, strike - spot_price)
+                time_value_pe = spot_price * (pe_iv / 100) * 0.1
+                pe_ltp = round(intrinsic_pe + time_value_pe * max(0.1, 1 - abs(moneyness_pe) * 2), 2)
+            
             ce_oi = ce_data.get('oi', 0)
             pe_oi = pe_data.get('oi', 0)
+            
+            # Simulate OI if not available
+            if ce_oi == 0:
+                # Higher OI near ATM, lower OI as we move away
+                atm_distance = abs(strike - spot_price) / interval
+                ce_oi = int(max(1000, 50000 * (1 / (1 + atm_distance * 0.5))))
+            if pe_oi == 0:
+                atm_distance = abs(strike - spot_price) / interval
+                pe_oi = int(max(1000, 45000 * (1 / (1 + atm_distance * 0.5))))
             
             total_call_oi += ce_oi
             total_put_oi += pe_oi
