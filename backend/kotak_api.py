@@ -582,41 +582,87 @@ class KotakNeoAPI:
     
     # ==================== MARKET DATA ====================
     
-    async def get_quotes(self, instrument_tokens: list, quote_type: str = 'all') -> Dict:
+    async def get_quotes(self, instrument_tokens: list, quote_type: str = 'ltp', is_index: bool = False) -> Dict:
         """
-        Get real-time quotes for instruments.
+        Get real-time quotes for instruments using Kotak Neo API v2.
         
         Based on official SDK QuotesAPI:
-        This API can be accessed with just the consumer_key (access_token).
+        POST {baseUrl}/quick/user/quotes OR using session credentials
         
         Args:
             instrument_tokens: List of dicts with instrument_token and exchange_segment
                 Example: [{"instrument_token": "11536", "exchange_segment": "nse_cm"}]
-            quote_type: all, depth, ohlc, ltp, oi, 52w, circuit_limits, scrip_details
+            quote_type: ltp, market_depth, ohlc, 52w, circuit_limits, scrip_details, all
+            is_index: Set to True for index instruments (NIFTY, BANKNIFTY)
         """
-        # Quotes API endpoint (from official SDK)
-        url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes/neosymbol'
+        # Try using authenticated endpoint first if authenticated
+        if self.session.is_authenticated and self.session.base_url:
+            url = f'{self.session.base_url}/quick/user/quotes'
+            headers = self._get_auth_headers()
+        else:
+            # Fallback to public quotes endpoint with session credentials
+            url = f'{self.LOGIN_BASE_URL}/script-details/1.0/quotes'
+            headers = self._get_quote_headers()
+            # Add session credentials if available
+            if self.session.view_token:
+                headers['session_token'] = self.session.view_token
+            if self.session.sid:
+                headers['sid'] = self.session.sid
+            if self.session.server_id:
+                headers['server_id'] = self.session.server_id
         
         body = {
             'instrument_tokens': instrument_tokens,
-            'quote_type': quote_type or 'all'
+            'quote_type': quote_type or 'ltp',
+            'isIndex': is_index
         }
+        
+        logger.info(f"Quotes request to: {url}")
+        logger.info(f"Quotes body: {body}")
         
         try:
             response = await self.client.post(
                 url,
                 json=body,
-                headers=self._get_quote_headers()
+                headers=headers
             )
+            
+            logger.info(f"Quotes response status: {response.status_code}")
+            logger.info(f"Quotes response: {response.text[:500]}")
+            
             data = response.json()
             
             if 200 <= response.status_code <= 299:
-                return {'success': True, 'quotes': data.get('data', data), 'raw_response': data}
+                quotes_data = data.get('data', data.get('message', data))
+                return {'success': True, 'quotes': quotes_data, 'raw_response': data}
             else:
-                return {'success': False, 'error': data.get('message', 'Failed to get quotes')}
+                error = data.get('message', data.get('error', 'Failed to get quotes'))
+                logger.error(f"Quotes API error: {error}")
+                return {'success': False, 'error': error, 'raw_response': data}
         except Exception as e:
             logger.error(f'Get quotes error: {e}')
             return {'success': False, 'error': str(e)}
+    
+    async def get_index_quote(self, symbol: str) -> Dict:
+        """
+        Get quote for index instruments like NIFTY, BANKNIFTY.
+        
+        Args:
+            symbol: NIFTY or BANKNIFTY
+        """
+        # Index instrument tokens (these are standard)
+        index_tokens = {
+            'NIFTY': {'instrument_token': '26000', 'exchange_segment': 'nse_cm'},
+            'NIFTY 50': {'instrument_token': '26000', 'exchange_segment': 'nse_cm'},
+            'BANKNIFTY': {'instrument_token': '26009', 'exchange_segment': 'nse_cm'},
+            'NIFTY BANK': {'instrument_token': '26009', 'exchange_segment': 'nse_cm'},
+        }
+        
+        token_info = index_tokens.get(symbol.upper())
+        if not token_info:
+            return {'success': False, 'error': f'Unknown index: {symbol}'}
+        
+        return await self.get_quotes([token_info], quote_type='ltp', is_index=True)
     
     async def get_scripmaster(self, exchange_segment: str = None) -> Dict:
         """

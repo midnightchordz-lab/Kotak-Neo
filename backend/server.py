@@ -211,14 +211,62 @@ async def run_simulation_loop():
 @api_router.get("/market/quote/{symbol}")
 async def get_quote(symbol: str):
     """Get current quote for a symbol"""
-    # Try live API first
+    symbol_upper = symbol.upper()
+    
+    # Try live API first if authenticated
     if kotak_api and kotak_api.session.is_authenticated:
-        result = await kotak_api.get_quotes([{"exchange_segment": "nse_fo", "token": symbol}])
-        if result.get('success'):
-            return result
+        # Determine if this is an index
+        is_index = symbol_upper in ['NIFTY', 'BANKNIFTY', 'NIFTY 50', 'NIFTY BANK']
+        
+        # Get instrument token based on symbol type
+        if is_index:
+            result = await kotak_api.get_index_quote(symbol_upper)
+        else:
+            # For stocks, use the instrument token format
+            instrument_info = simulator.instruments.get(symbol_upper, {})
+            token = instrument_info.get('token', symbol_upper)
+            segment = instrument_info.get('segment', 'nse_cm')
+            
+            result = await kotak_api.get_quotes(
+                [{"instrument_token": token, "exchange_segment": segment}],
+                quote_type='ltp',
+                is_index=False
+            )
+        
+        if result.get('success') and result.get('quotes'):
+            quotes = result['quotes']
+            # Parse the Kotak response format
+            if isinstance(quotes, list) and len(quotes) > 0:
+                q = quotes[0]
+                return {
+                    "success": True,
+                    "quote": {
+                        "symbol": symbol_upper,
+                        "ltp": float(q.get('last_traded_price', q.get('ltp', 0))),
+                        "open": float(q.get('ohlc', {}).get('open', 0)) if isinstance(q.get('ohlc'), dict) else 0,
+                        "high": float(q.get('ohlc', {}).get('high', 0)) if isinstance(q.get('ohlc'), dict) else 0,
+                        "low": float(q.get('ohlc', {}).get('low', 0)) if isinstance(q.get('ohlc'), dict) else 0,
+                        "close": float(q.get('ohlc', {}).get('close', 0)) if isinstance(q.get('ohlc'), dict) else 0,
+                        "volume": int(q.get('volume', 0)),
+                        "change": 0,
+                        "change_percent": 0
+                    },
+                    "mode": "live"
+                }
+            elif isinstance(quotes, dict):
+                # Single quote response
+                return {
+                    "success": True,
+                    "quote": {
+                        "symbol": symbol_upper,
+                        "ltp": float(quotes.get('last_traded_price', quotes.get('ltp', 0))),
+                        "volume": int(quotes.get('volume', 0)),
+                    },
+                    "mode": "live"
+                }
     
     # Fall back to simulation
-    quote = simulator.get_quote(symbol.upper())
+    quote = simulator.get_quote(symbol_upper)
     if not quote:
         raise HTTPException(status_code=404, detail=f"Symbol {symbol} not found")
     
