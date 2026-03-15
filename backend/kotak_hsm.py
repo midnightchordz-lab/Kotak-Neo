@@ -1,13 +1,16 @@
 """
 Kotak Neo HSM (High Speed Market) WebSocket Connection
 Real-time market data streaming for live quotes, indices, and market depth
+
+Uses raw websockets for Kotak's market feed based on:
+wss://wstreamer.kotaksecurities.com/feed/?EIO=3&transport=websocket&access_token=TOKEN
 """
 import asyncio
 import json
 import logging
-import socketio
-from typing import Dict, List, Optional, Callable
-from dataclasses import dataclass
+import websockets
+from typing import Dict, List, Optional, Callable, Any
+from dataclasses import dataclass, asdict
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
@@ -28,276 +31,265 @@ class MarketTick:
     timestamp: str
     bid: float = 0
     ask: float = 0
-    oi: int = 0  # Open Interest for F&O
+    oi: int = 0
 
 class KotakHSMWebSocket:
     """
-    Kotak Neo HSM WebSocket client for real-time market data
+    Kotak Neo HSM WebSocket client using raw websockets
     
-    Usage:
-        hsm = KotakHSMWebSocket(access_token, sid, server_id)
-        await hsm.connect()
-        await hsm.subscribe_index("nse_cm|Nifty 50&nse_cm|Nifty Bank&")
-        await hsm.subscribe_scrip("nse_cm|11536&")
+    Based on: https://howutrade.github.io/kotak-websocket/
+    
+    Connection flow:
+    1. Connect to wss://wstreamer.kotaksecurities.com/feed/?EIO=3&transport=websocket&access_token=TOKEN
+    2. Wait for welcome message
+    3. Send subscription: 42["pageload", {"inputtoken":"nse_cm|Nifty 50"}]
+    4. Receive market data
+    5. Send ping "3" every 10 seconds
     """
     
-    # WebSocket URLs
-    WS_URL = "wss://wstreamer.kotaksecurities.com/feed/"
+    # WebSocket URL
+    WS_BASE = "wss://wstreamer.kotaksecurities.com/feed/"
     
-    def __init__(self, access_token: str, sid: str, server_id: str):
-        """
-        Initialize HSM WebSocket connection
-        
-        Args:
-            access_token: Session token from login
-            sid: Session ID from login
-            server_id: Data center/server ID
-        """
+    def __init__(self, access_token: str, sid: str = "", server_id: str = ""):
+        """Initialize HSM WebSocket"""
         self.access_token = access_token
         self.sid = sid
         self.server_id = server_id
         
-        # Socket.IO client
-        self.sio = socketio.AsyncClient(
-            reconnection=True,
-            reconnection_attempts=5,
-            reconnection_delay=1,
-            logger=False,
-            engineio_logger=False
-        )
-        
-        # Callbacks
-        self.on_tick: Optional[Callable[[MarketTick], None]] = None
-        self.on_index_tick: Optional[Callable[[MarketTick], None]] = None
-        self.on_depth: Optional[Callable[[Dict], None]] = None
-        self.on_error: Optional[Callable[[str], None]] = None
-        self.on_connect: Optional[Callable[[], None]] = None
-        self.on_disconnect: Optional[Callable[[], None]] = None
-        
-        # State
+        self.ws: Optional[websockets.WebSocketClientProtocol] = None
         self.is_connected = False
         self.subscribed_scrips: List[str] = []
         self.subscribed_indices: List[str] = []
-        
-        # Latest ticks cache
         self.latest_ticks: Dict[str, MarketTick] = {}
         
-        # Setup event handlers
-        self._setup_handlers()
-    
-    def _setup_handlers(self):
-        """Setup Socket.IO event handlers"""
+        # Background tasks
+        self._ping_task: Optional[asyncio.Task] = None
+        self._receive_task: Optional[asyncio.Task] = None
         
-        @self.sio.event
-        async def connect():
-            logger.info("HSM WebSocket connected")
-            self.is_connected = True
-            if self.on_connect:
-                self.on_connect()
-        
-        @self.sio.event
-        async def disconnect():
-            logger.info("HSM WebSocket disconnected")
-            self.is_connected = False
-            if self.on_disconnect:
-                self.on_disconnect()
-        
-        @self.sio.event
-        async def connect_error(data):
-            logger.error(f"HSM WebSocket connection error: {data}")
-            if self.on_error:
-                self.on_error(str(data))
-        
-        # Market feed events
-        @self.sio.on('stock')
-        async def on_stock_feed(data):
-            """Handle stock/scrip feed"""
-            try:
-                tick = self._parse_tick(data, is_index=False)
-                if tick:
-                    self.latest_ticks[tick.symbol] = tick
-                    if self.on_tick:
-                        self.on_tick(tick)
-            except Exception as e:
-                logger.error(f"Error parsing stock feed: {e}")
-        
-        @self.sio.on('index')
-        async def on_index_feed(data):
-            """Handle index feed (NIFTY, BANKNIFTY)"""
-            try:
-                tick = self._parse_tick(data, is_index=True)
-                if tick:
-                    self.latest_ticks[tick.symbol] = tick
-                    if self.on_index_tick:
-                        self.on_index_tick(tick)
-                    elif self.on_tick:
-                        self.on_tick(tick)
-            except Exception as e:
-                logger.error(f"Error parsing index feed: {e}")
-        
-        @self.sio.on('depth')
-        async def on_depth_feed(data):
-            """Handle market depth feed"""
-            try:
-                if self.on_depth:
-                    self.on_depth(data)
-            except Exception as e:
-                logger.error(f"Error parsing depth feed: {e}")
-        
-        @self.sio.on('error')
-        async def on_ws_error(data):
-            """Handle WebSocket errors"""
-            logger.error(f"HSM WebSocket error: {data}")
-            if self.on_error:
-                self.on_error(str(data))
-    
-    def _parse_tick(self, data: Dict, is_index: bool = False) -> Optional[MarketTick]:
-        """Parse raw WebSocket tick data into MarketTick object"""
-        try:
-            # Kotak feed format
-            # iv = LTP, ic = prev close, highPrice = high, lowPrice = low
-            # openPrice = open, tvalue = timestamp, vol = volume
-            ltp = float(data.get('iv', data.get('ltp', 0)))
-            prev_close = float(data.get('ic', data.get('close', ltp)))
-            
-            change = ltp - prev_close
-            change_percent = (change / prev_close * 100) if prev_close > 0 else 0
-            
-            symbol = data.get('tk', data.get('symbol', 'UNKNOWN'))
-            exchange = data.get('e', data.get('exchange', 'nse_cm'))
-            
-            return MarketTick(
-                symbol=symbol,
-                exchange=exchange,
-                ltp=ltp,
-                open=float(data.get('openPrice', data.get('open', ltp))),
-                high=float(data.get('highPrice', data.get('high', ltp))),
-                low=float(data.get('lowPrice', data.get('low', ltp))),
-                close=prev_close,
-                volume=int(data.get('vol', data.get('volume', 0))),
-                change=round(change, 2),
-                change_percent=round(change_percent, 2),
-                timestamp=data.get('tvalue', datetime.utcnow().isoformat()),
-                bid=float(data.get('bp', data.get('bid', 0))),
-                ask=float(data.get('sp', data.get('ask', 0))),
-                oi=int(data.get('oi', 0))
-            )
-        except Exception as e:
-            logger.error(f"Error parsing tick: {e}, data: {data}")
-            return None
+        # Callbacks
+        self.on_tick: Optional[Callable[[MarketTick], None]] = None
+        self.on_error: Optional[Callable[[str], None]] = None
     
     async def connect(self) -> bool:
-        """
-        Connect to Kotak HSM WebSocket
-        
-        Returns:
-            True if connected successfully
-        """
+        """Connect to Kotak HSM WebSocket"""
         try:
-            # Use Socket.IO connection with proper URL format
-            # URL: https://wstreamer.kotaksecurities.com?access_token=TOKEN
-            # Path: /feed/
-            ws_url = f"https://wstreamer.kotaksecurities.com?access_token={self.access_token}"
+            # Build WebSocket URL with access token
+            ws_url = f"{self.WS_BASE}?EIO=3&transport=websocket&access_token={self.access_token}"
             
-            logger.info(f"Connecting to HSM WebSocket at: {ws_url[:50]}...")
-            logger.info(f"Using SID: {self.sid}, Server ID: {self.server_id}")
+            logger.info(f"Connecting to HSM: {ws_url[:80]}...")
             
-            await self.sio.connect(
-                ws_url,
-                socketio_path='/feed/',
-                transports=['websocket', 'polling']
+            # Connect with longer timeout
+            self.ws = await asyncio.wait_for(
+                websockets.connect(
+                    ws_url,
+                    ping_interval=None,  # We'll handle pings manually
+                    ping_timeout=None,
+                    close_timeout=10
+                ),
+                timeout=30
             )
             
+            logger.info("WebSocket connected, waiting for welcome...")
+            
+            # Wait for welcome message
+            welcome = await asyncio.wait_for(self.ws.recv(), timeout=10)
+            logger.info(f"Received: {welcome[:100] if len(welcome) > 100 else welcome}")
+            
+            # Check for broadcast (error) message
+            if "broadcast" in str(welcome).lower():
+                logger.error("Received broadcast message - authentication failed")
+                await self.ws.close()
+                return False
+            
             self.is_connected = True
-            logger.info("HSM WebSocket connected successfully")
+            
+            # Start ping task (every 10 seconds)
+            self._ping_task = asyncio.create_task(self._ping_loop())
+            
+            # Start receive task
+            self._receive_task = asyncio.create_task(self._receive_loop())
+            
+            logger.info("HSM WebSocket connected successfully!")
             return True
             
+        except asyncio.TimeoutError:
+            logger.error("HSM connection timeout")
+            return False
         except Exception as e:
-            logger.error(f"Failed to connect to HSM WebSocket: {e}")
-            self.is_connected = False
+            logger.error(f"HSM connection error: {e}")
             return False
     
     async def disconnect(self):
         """Disconnect from WebSocket"""
-        try:
-            await self.sio.disconnect()
-            self.is_connected = False
-            logger.info("HSM WebSocket disconnected")
-        except Exception as e:
-            logger.error(f"Error disconnecting: {e}")
+        self.is_connected = False
+        
+        if self._ping_task:
+            self._ping_task.cancel()
+        if self._receive_task:
+            self._receive_task.cancel()
+        if self.ws:
+            await self.ws.close()
+        
+        logger.info("HSM WebSocket disconnected")
     
-    async def subscribe_scrip(self, scrips: str):
+    async def _ping_loop(self):
+        """Send ping every 10 seconds to keep connection alive"""
+        while self.is_connected:
+            try:
+                await asyncio.sleep(10)
+                if self.ws and self.is_connected:
+                    await self.ws.send("3")  # Engine.IO ping
+                    logger.debug("Sent ping")
+            except Exception as e:
+                logger.error(f"Ping error: {e}")
+                break
+    
+    async def _receive_loop(self):
+        """Receive and process messages"""
+        while self.is_connected and self.ws:
+            try:
+                message = await self.ws.recv()
+                await self._process_message(message)
+            except websockets.ConnectionClosed:
+                logger.warning("WebSocket connection closed")
+                self.is_connected = False
+                break
+            except Exception as e:
+                logger.error(f"Receive error: {e}")
+    
+    async def _process_message(self, message: str):
+        """Process incoming WebSocket message"""
+        try:
+            # Engine.IO messages start with a number
+            # 0 = open, 2 = ping, 3 = pong, 4 = message
+            # 42 = Socket.IO event message
+            
+            if message.startswith("42"):
+                # Parse Socket.IO event
+                data = json.loads(message[2:])
+                event_name = data[0] if isinstance(data, list) else None
+                event_data = data[1] if isinstance(data, list) and len(data) > 1 else data
+                
+                if event_name == "stock" or event_name == "sf":
+                    tick = self._parse_tick(event_data)
+                    if tick:
+                        self.latest_ticks[tick.symbol] = tick
+                        if self.on_tick:
+                            self.on_tick(tick)
+                            
+                elif event_name == "index" or event_name == "if":
+                    tick = self._parse_tick(event_data, is_index=True)
+                    if tick:
+                        self.latest_ticks[tick.symbol] = tick
+                        if self.on_tick:
+                            self.on_tick(tick)
+                            
+                elif event_name == "depth" or event_name == "dp":
+                    logger.debug(f"Depth update: {event_data}")
+                    
+            elif message == "3":
+                # Pong response, ignore
+                pass
+            elif message.startswith("0"):
+                # Open/handshake
+                logger.info("Handshake received")
+                
+        except json.JSONDecodeError:
+            logger.debug(f"Non-JSON message: {message[:50]}")
+        except Exception as e:
+            logger.error(f"Message processing error: {e}")
+    
+    def _parse_tick(self, data: Any, is_index: bool = False) -> Optional[MarketTick]:
+        """Parse tick data from WebSocket message"""
+        try:
+            if isinstance(data, dict):
+                ltp = float(data.get('iv', data.get('ltp', data.get('lastPrice', 0))))
+                prev_close = float(data.get('ic', data.get('close', data.get('previousClose', ltp))))
+                
+                change = ltp - prev_close
+                change_pct = (change / prev_close * 100) if prev_close > 0 else 0
+                
+                return MarketTick(
+                    symbol=data.get('tk', data.get('symbol', data.get('tradingSymbol', 'UNKNOWN'))),
+                    exchange=data.get('e', data.get('exchange', 'nse_cm')),
+                    ltp=ltp,
+                    open=float(data.get('openPrice', data.get('open', ltp))),
+                    high=float(data.get('highPrice', data.get('high', ltp))),
+                    low=float(data.get('lowPrice', data.get('low', ltp))),
+                    close=prev_close,
+                    volume=int(data.get('vol', data.get('volume', data.get('totalTradedVolume', 0)))),
+                    change=round(change, 2),
+                    change_percent=round(change_pct, 2),
+                    timestamp=str(data.get('tvalue', data.get('lastUpdateTime', datetime.utcnow().isoformat()))),
+                    bid=float(data.get('bp', data.get('bidPrice', 0))),
+                    ask=float(data.get('sp', data.get('askPrice', 0))),
+                    oi=int(data.get('oi', data.get('openInterest', 0)))
+                )
+        except Exception as e:
+            logger.error(f"Error parsing tick: {e}")
+        return None
+    
+    async def subscribe_index(self, indices: str) -> bool:
         """
-        Subscribe to scrip/stock feeds
+        Subscribe to index feeds
         
         Args:
-            scrips: Format "exchange|token&exchange|token&"
-                   Example: "nse_cm|11536&nse_fo|43651&"
+            indices: Format "nse_cm|Nifty 50&nse_cm|Nifty Bank&"
         """
-        if not self.is_connected:
-            logger.warning("Not connected, cannot subscribe")
+        if not self.is_connected or not self.ws:
+            logger.warning("Not connected")
             return False
         
         try:
-            # Emit subscription message
-            await self.sio.emit('pageload', {'inputtoken': scrips})
-            self.subscribed_scrips.append(scrips)
-            logger.info(f"Subscribed to scrips: {scrips}")
-            return True
-        except Exception as e:
-            logger.error(f"Failed to subscribe to scrips: {e}")
-            return False
-    
-    async def subscribe_index(self, indices: str):
-        """
-        Subscribe to index feeds (NIFTY, BANKNIFTY)
-        
-        Args:
-            indices: Format "exchange|indexname&exchange|indexname&"
-                    Example: "nse_cm|Nifty 50&nse_cm|Nifty Bank&"
-        """
-        if not self.is_connected:
-            logger.warning("Not connected, cannot subscribe")
-            return False
-        
-        try:
-            await self.sio.emit('pageload', {'inputtoken': indices, 'isIndex': True})
+            # Format: 42["pageload", {"inputtoken": "nse_cm|Nifty 50&"}]
+            msg = json.dumps(["pageload", {"inputtoken": indices}])
+            await self.ws.send(f"42{msg}")
+            
             self.subscribed_indices.append(indices)
             logger.info(f"Subscribed to indices: {indices}")
             return True
         except Exception as e:
-            logger.error(f"Failed to subscribe to indices: {e}")
+            logger.error(f"Subscribe error: {e}")
             return False
     
-    async def subscribe_depth(self, scrips: str):
+    async def subscribe_scrip(self, scrips: str) -> bool:
         """
-        Subscribe to market depth (order book)
+        Subscribe to scrip/stock feeds
         
         Args:
-            scrips: Format "exchange|token&"
+            scrips: Format "nse_cm|11536&nse_fo|43651&"
         """
-        if not self.is_connected:
-            logger.warning("Not connected, cannot subscribe")
+        if not self.is_connected or not self.ws:
+            logger.warning("Not connected")
             return False
         
         try:
-            await self.sio.emit('depthsub', {'inputtoken': scrips})
-            logger.info(f"Subscribed to depth: {scrips}")
+            msg = json.dumps(["pageload", {"inputtoken": scrips}])
+            await self.ws.send(f"42{msg}")
+            
+            self.subscribed_scrips.append(scrips)
+            logger.info(f"Subscribed to scrips: {scrips}")
             return True
         except Exception as e:
-            logger.error(f"Failed to subscribe to depth: {e}")
+            logger.error(f"Subscribe error: {e}")
             return False
     
-    async def unsubscribe(self, scrips: str):
+    async def unsubscribe(self, tokens: str) -> bool:
         """Unsubscribe from feeds"""
+        if not self.is_connected or not self.ws:
+            return False
+        
         try:
-            await self.sio.emit('pageunload', {'inputtoken': scrips})
-            logger.info(f"Unsubscribed from: {scrips}")
+            msg = json.dumps(["pageunload", {"inputtoken": tokens}])
+            await self.ws.send(f"42{msg}")
+            logger.info(f"Unsubscribed: {tokens}")
+            return True
         except Exception as e:
-            logger.error(f"Failed to unsubscribe: {e}")
+            logger.error(f"Unsubscribe error: {e}")
+            return False
     
     def get_latest_tick(self, symbol: str) -> Optional[MarketTick]:
-        """Get the latest cached tick for a symbol"""
+        """Get latest cached tick"""
         return self.latest_ticks.get(symbol)
     
     def get_all_ticks(self) -> Dict[str, MarketTick]:
