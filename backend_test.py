@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import Dict, Any, List
 
 # Configuration
-BASE_URL = "https://bold-carson-2.preview.emergentagent.com/api"
+BASE_URL = "https://costar-trading-hub.preview.emergentagent.com/api"
 TEST_SYMBOL = "NIFTY"
 BACKUP_SYMBOL = "BANKNIFTY"
 
