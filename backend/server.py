@@ -30,7 +30,8 @@ from ai_validator import AIValidator
 from backtester import Backtester
 from options_chain import options_chain_generator, OptionsChain
 from websocket_manager import ws_manager
-from kotak_hsm import KotakHSMWebSocket, get_hsm_client, set_hsm_client
+from kotak_hsm import KotakHSMWebSocket, get_hsm_client as get_old_hsm_client, set_hsm_client as set_old_hsm_client
+from live_data_manager import get_live_data_manager, init_live_data
 from kotak_scrip_master import scrip_master, KotakScripMaster
 from live_price_poller import live_price_poller, get_live_poller
 from live_options_service import live_options_service, get_live_options_service
@@ -225,69 +226,85 @@ async def auth_status():
 
 # ==================== HSM WEBSOCKET ====================
 
+# Global reference to live data manager
+_live_data_mgr = None
+
+def get_hsm_client():
+    """Get the current HSM client (from live data manager)"""
+    global _live_data_mgr
+    if _live_data_mgr:
+        return _live_data_mgr.hsm_client
+    return get_old_hsm_client()
+
+def set_hsm_client(client):
+    """Set HSM client (backward compatibility)"""
+    set_old_hsm_client(client)
+
 @api_router.post("/hsm/connect")
 async def connect_hsm(background_tasks: BackgroundTasks):
     """
     Connect to Kotak HSM WebSocket for real-time market data streaming.
     Requires authentication (TOTP + MPIN) to be completed first.
+    
+    Uses the official Kotak HSM protocol:
+    - URL: wss://mlhsm.kotaksecurities.com
+    - Auth: Session token + SID
     """
+    global _live_data_mgr
+    
     if not kotak_api or not kotak_api.session.is_authenticated:
         raise HTTPException(status_code=401, detail="Authentication required. Complete TOTP and MPIN first.")
     
-    # Get credentials for HSM
-    # The WebSocket requires the CONSUMER KEY (access token from Kotak dashboard)
-    # NOT the edit_token from MPIN validation
-    consumer_key = kotak_api.consumer_key  # This is the API access token
-    edit_token = kotak_api.session.edit_token  # Session token from MPIN
+    # Get session credentials
+    # The HSM WebSocket requires the session token (edit_token) and SID from MPIN validation
+    edit_token = kotak_api.session.edit_token
     sid = kotak_api.session.edit_sid
-    server_id = kotak_api.session.server_id
     
-    logger.info(f"HSM Connection - Consumer Key: {consumer_key[:20] if consumer_key else 'MISSING'}...")
-    logger.info(f"HSM Connection - Edit Token: {edit_token[:20] if edit_token else 'MISSING'}...")
-    logger.info(f"HSM Connection - SID: {sid[:20] if sid else 'MISSING'}...")
-    logger.info(f"HSM Connection - Server ID: {server_id if server_id else 'MISSING'}")
+    logger.info(f"HSM Connection - Edit Token: {edit_token[:30] if edit_token else 'MISSING'}...")
+    logger.info(f"HSM Connection - SID: {sid[:30] if sid else 'MISSING'}...")
     
-    if not consumer_key:
-        raise HTTPException(status_code=400, detail="Consumer key (access token) not available")
+    if not edit_token or not sid:
+        raise HTTPException(status_code=400, detail="Session credentials not available. Complete authentication first.")
     
-    # Create HSM client with CONSUMER KEY as access token
-    # According to howutrade.github.io/kotak-websocket/ documentation
-    hsm = KotakHSMWebSocket(
-        access_token=consumer_key,  # Use consumer key, not edit_token
-        sid=sid,
-        server_id=server_id
-    )
-    
-    # Set up callbacks to broadcast via our WebSocket
-    def on_tick(tick):
-        logger.info(f"HSM Tick: {tick.symbol} LTP={tick.ltp}")
-        # Update simulator with live price
-        if tick.symbol in ['Nifty 50', 'NIFTY']:
-            simulator.instruments['NIFTY']['base_price'] = tick.ltp
-        elif tick.symbol in ['Nifty Bank', 'BANKNIFTY']:
-            simulator.instruments['BANKNIFTY']['base_price'] = tick.ltp
-    
-    hsm.on_tick = on_tick
-    
-    # Connect in background
+    # Initialize live data manager with new HSM client
     try:
-        connected = await hsm.connect()
+        _live_data_mgr = get_live_data_manager()
+        connected = await _live_data_mgr.initialize(edit_token, sid)
+        
         if connected:
-            set_hsm_client(hsm)
-            
-            # Auto-subscribe to NIFTY and BANKNIFTY
-            await hsm.subscribe_index("nse_cm|Nifty 50&nse_cm|Nifty Bank&")
-            
             return {
                 "success": True,
-                "message": "Connected to HSM WebSocket",
-                "subscribed": ["Nifty 50", "Nifty Bank"]
+                "message": "Connected to HSM WebSocket (Official Protocol)",
+                "subscribed_indices": _live_data_mgr.subscribed_indices,
+                "status": _live_data_mgr.get_status()
             }
         else:
-            return {"success": False, "error": "Failed to connect to HSM"}
+            # Fallback to REST polling if WebSocket fails
+            logger.warning("HSM WebSocket failed, starting REST poller as fallback")
+            poller = get_live_poller()
+            await poller.start(kotak_api)
+            
+            return {
+                "success": False, 
+                "error": "HSM WebSocket connection failed",
+                "fallback": "REST polling started as fallback",
+                "poller_status": poller.is_running
+            }
     except Exception as e:
         logger.error(f"HSM connection error: {e}")
-        return {"success": False, "error": str(e)}
+        import traceback
+        logger.error(traceback.format_exc())
+        
+        # Fallback to REST polling
+        logger.warning("Starting REST poller as fallback due to HSM error")
+        poller = get_live_poller()
+        await poller.start(kotak_api)
+        
+        return {
+            "success": False, 
+            "error": str(e),
+            "fallback": "REST polling started as fallback"
+        }
 
 @api_router.post("/hsm/disconnect")
 async def disconnect_hsm():
@@ -331,15 +348,40 @@ async def subscribe_hsm(scrips: str = "", indices: str = "", depth: bool = False
 @api_router.get("/hsm/status")
 async def hsm_status():
     """Get HSM WebSocket connection status"""
-    hsm = get_hsm_client()
+    global _live_data_mgr
+    
+    # Try new live data manager first
+    if _live_data_mgr and _live_data_mgr.is_connected:
+        return {
+            "connected": True,
+            "protocol": "official_hsm",
+            "status": _live_data_mgr.get_status(),
+            "index_data": _live_data_mgr.get_all_index_data(),
+            "option_count": len(_live_data_mgr.option_data)
+        }
+    
+    # Fallback to old HSM client
+    hsm = get_old_hsm_client()
     if hsm:
         return {
             "connected": hsm.is_connected,
+            "protocol": "legacy_hsm",
             "subscribed_indices": hsm.subscribed_indices,
             "subscribed_scrips": hsm.subscribed_scrips,
             "latest_ticks": {k: {"ltp": v.ltp, "change": v.change} for k, v in hsm.get_all_ticks().items()}
         }
-    return {"connected": False, "message": "HSM client not initialized"}
+    
+    # Check REST poller
+    poller = get_live_poller()
+    if poller and poller.is_running:
+        return {
+            "connected": False,
+            "protocol": "rest_polling",
+            "poller_running": True,
+            "latest_prices": poller.get_all_prices()
+        }
+    
+    return {"connected": False, "message": "No live data connection active"}
 
 # ==================== LIVE PRICE POLLER ====================
 
